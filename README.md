@@ -37,6 +37,10 @@ java -jar "Path\to\BackdoorDetector-v2.jar" scan "Path\to\plugin-to-scan.jar" <s
 ⚠️ Note:
 - On the first run, a config.properties file will be generated in the execution directory.
 - Once it appears, open the file and enter your Gemini API key.
+  
+## ⚠️ IMPORTANT DISCLAIMER
+- This tool is a Static Application Security Testing (SAST) analyzer. It is designed to detect common threats but CANNOT GUARANTEE detection of 100% of all types of backdoors.
+- This tool is provided "AS IS", WITHOUT WARRANTY. Users assume all risks associated with its use.
 
 ## 👥 Join Our Community
 
