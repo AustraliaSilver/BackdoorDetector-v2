@@ -8,6 +8,7 @@ import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -18,42 +19,37 @@ import java.util.stream.Stream;
 
 public class DecompilerManager {
     private static final Logger logger = StandaloneLogger.getLogger();
-    private final KrakatauDecompiler krakatauDecompiler;
 
     public DecompilerManager() {
-        this.krakatauDecompiler = new KrakatauDecompiler();
     }
 
     public PluginWorker.DecompilationResult decompile(Path pluginFile, Path workingDir) throws IOException {
         List<Path> allClassFiles = extractClassFiles(workingDir);
 
         Path vineflowerOutputDir = workingDir.resolve("decompiled_vineflower");
-        runVineflower(pluginFile, vineflowerOutputDir);
-        List<Path> vineflowerJavaFiles = collectJavaFiles(vineflowerOutputDir);
-
-        List<Path> failedClassFiles = findFailedFiles(allClassFiles, vineflowerJavaFiles, workingDir);
-
-        List<Path> krakatauJavaFiles = new ArrayList<>();
-        if (!failedClassFiles.isEmpty() && krakatauDecompiler.isConfigured()) {
-            logger.info("Vineflower failed on " + failedClassFiles.size() + " files. Falling back to Krakatau...");
-            Path krakatauOutputDir = workingDir.resolve("decompiled_krakatau");
-            Files.createDirectories(krakatauOutputDir);
-            krakatauJavaFiles = krakatauDecompiler.decompile(failedClassFiles, krakatauOutputDir);
-        } else if (!failedClassFiles.isEmpty()) {
-            logger.warning("Krakatau path not configured. Skipping fallback for " + failedClassFiles.size() + " files.");
+        List<Path> vineflowerJavaFiles;
+        try {
+            runVineflower(pluginFile, vineflowerOutputDir);
+            vineflowerJavaFiles = collectJavaFiles(vineflowerOutputDir);
+        } catch (Exception e) {
+            logger.log(Level.SEVERE, "Vineflower decompilation failed catastrophically.", e);
+            vineflowerJavaFiles = new ArrayList<>(); 
         }
 
-        List<Path> allJavaFiles = Stream.concat(vineflowerJavaFiles.stream(), krakatauJavaFiles.stream())
-                .collect(Collectors.toList());
+        List<Path> failedClassFiles = findFailedFiles(allClassFiles, vineflowerJavaFiles, workingDir);
+        if (!failedClassFiles.isEmpty()) {
+            logger.warning("Vineflower failed on " + failedClassFiles.size() + " files. No fallback decompiler configured.");
+        }
+
+        List<Path> allJavaFiles = new ArrayList<>(vineflowerJavaFiles);
 
         logger.info("Decompilation complete. Total Java files: " + allJavaFiles.size()
-                + " (Vineflower: " + vineflowerJavaFiles.size()
-                + ", Krakatau: " + krakatauJavaFiles.size() + ")");
+                + " (Vineflower: " + vineflowerJavaFiles.size() + ")");
 
         return new PluginWorker.DecompilationResult(allJavaFiles, new HashMap<>(), workingDir);
     }
 
-    private void runVineflower(Path pluginFile, Path outputDir) throws IOException {
+    private void runVineflower(Path pluginFile, Path outputDir) throws Exception {
         logger.info("Running Vineflower decompiler...");
         Files.createDirectories(outputDir);
         Map<String, Object> options = Map.of("dgs", "1", "rsy", "1", "ind", "    ", "log", "warn");
@@ -99,5 +95,28 @@ public class DecompilerManager {
         try (Stream<Path> stream = Files.walk(outputDir)) {
             return stream.filter(p -> p.toString().endsWith(".java")).collect(Collectors.toList());
         }
+    }
+
+    private List<Path> findLibraryPaths() {
+        List<Path> libs = new ArrayList<>();
+        String javaHome = System.getProperty("java.home");
+        if (javaHome != null) {
+            Path jmods = Path.of(javaHome, "jmods");
+            if (Files.isDirectory(jmods)) {
+                try (Stream<Path> stream = Files.walk(jmods)) {
+                    stream.filter(p -> p.toString().endsWith(".jmod"))
+                          .forEach(libs::add);
+                } catch (IOException e) {
+                    logger.warning("Could not read jmods directory: " + e.getMessage());
+                }
+            }
+        }
+
+        String classpath = System.getProperty("java.class.path");
+        String separator = System.getProperty("path.separator");
+        Arrays.stream(classpath.split(separator))
+              .filter(p -> p.endsWith(".jar")).map(Path::of)
+              .forEach(libs::add);
+        return libs;
     }
 }

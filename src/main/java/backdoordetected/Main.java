@@ -119,7 +119,6 @@ public class Main {
         ConsoleHandler handler = new ConsoleHandler();
         handler.setFormatter(new SimpleFormatter());
         logger.addHandler(handler);
-        logger.setLevel(Level.INFO);
     }
 
     private static boolean createAndLoadConfig() {

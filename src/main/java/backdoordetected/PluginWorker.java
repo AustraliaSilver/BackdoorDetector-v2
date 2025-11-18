@@ -49,6 +49,7 @@ public class PluginWorker implements Runnable {
     private final DeobfuscationPipeline deobfuscationPipeline = new DeobfuscationPipeline();
     private final SymbolicAnalyzer symbolicAnalyzer = new SymbolicAnalyzer();
 
+    private final DecompilerManager decompilerManager = new DecompilerManager();
     private static final int MAX_PROMPT_LENGTH = 1_048_576;
     private static final long QUEUE_POLL_TIMEOUT_SECONDS = 5;
 
@@ -127,7 +128,7 @@ public class PluginWorker implements Runnable {
         Path tmpDir = null;
         try {
             tmpDir = Files.createTempDirectory(tempBaseDir, pluginFile.getFileName().toString() + "_modern_");
-            DecompilationResult res = performDecompilation(pluginFile, tmpDir, 0, true);
+            DecompilationResult res = decompilerManager.decompile(pluginFile, tmpDir);
             List<Path> javaFiles = res.javaFiles();
 
             if (javaFiles.isEmpty()) {
@@ -275,7 +276,7 @@ public class PluginWorker implements Runnable {
         Path tmpDir = null;
         try { 
             tmpDir = Files.createTempDirectory(tempBaseDir, pluginFile.getFileName().toString() + "_sandbox_");
-            DecompilationResult res = performDecompilation(pluginFile, tmpDir, 0, true);
+            DecompilationResult res = decompilerManager.decompile(pluginFile, tmpDir);
             List<Path> javaFiles = res.javaFiles();
             if (javaFiles.isEmpty()) {
                 logger.warning("No Java files found for sandbox analysis: " + pluginFile.getFileName());
@@ -301,7 +302,7 @@ public class PluginWorker implements Runnable {
         Path tmpDir = null;
         try {
             tmpDir = Files.createTempDirectory(tempBaseDir, pluginFile.getFileName().toString() + "_dataflow_");
-            DecompilationResult res = performDecompilation(pluginFile, tmpDir, 0, true);
+            DecompilationResult res = decompilerManager.decompile(pluginFile, tmpDir);
             List<Path> javaFiles = res.javaFiles();
             if (javaFiles.isEmpty()) {
                 logger.warning("No Java files found for dataflow analysis: " + pluginFile.getFileName());
@@ -408,91 +409,9 @@ public class PluginWorker implements Runnable {
                 logger.warning("Cache exists but contains no .java files. Re-running decompilation...");
             }
         }
+
         logger.info("No valid cache found. Starting fresh decompilation...");
-        Path decompiledOutputDir = specificCache.resolve("decompiled");
-        return performDecompilation(pluginFile, specificCache, 0, true);
-    }
-
-    private DecompilationResult performDecompilation(Path pluginFile, Path outputDir, int totalClassFiles, boolean collectClassCount) {
-        try {
-            logger.info("[DEBUG] Performing decompilation. Input: " + pluginFile.getFileName() + ", Output Dir: " + outputDir.getFileName());
-            Path decompiledOutputDir = outputDir.resolve("decompiled");
-            Files.createDirectories(decompiledOutputDir);
-
-            Map<String, Object> options = new HashMap<>();
-            options.put("dgs", "1");
-            options.put("rsy", "1");
-            options.put("ind", "    ");
-            options.put("log", "warn");
-
-            IFernflowerLogger vineLogger = new IFernflowerLogger() {
-                @Override
-                public void writeMessage(String message, Severity severity) {
-                    if (severity.ordinal() >= Severity.WARN.ordinal()) {
-                        logger.warning("[Vineflower] " + message);
-                    }
-                }
-
-                @Override
-                public void writeMessage(String message, Severity severity, Throwable t) {
-                    logger.log(java.util.logging.Level.WARNING, "[Vineflower] " + message, t);
-                }
-            };
-
-            Fernflower engine = new Fernflower(new DirectoryResultSaver(decompiledOutputDir.toFile()), options, vineLogger);
-            engine.addSource(pluginFile.toFile());
-            engine.decompileContext();
-
-        } catch (IOException e) {
-            logger.log(java.util.logging.Level.SEVERE, "Decompilation failed with IOException", e);
-        } catch (OutOfMemoryError e) {
-            logger.severe("CRITICAL: OutOfMemoryError during decompilation. The plugin might be too large or obfuscated.");
-            throw e;
-        } catch (Exception e) {
-            logger.log(java.util.logging.Level.SEVERE, "An unexpected error occurred during decompilation", e);
-        }
-
-        Path decompiledDir = outputDir.resolve("decompiled");
-        List<Path> javaFiles;
-        try (Stream<Path> walk = Files.walk(decompiledDir)) {
-            javaFiles = walk.filter(p -> p.toString().endsWith(".java")).collect(Collectors.toList());
-        } catch (IOException e) {
-            javaFiles = new ArrayList<>();
-            logger.log(java.util.logging.Level.SEVERE, "Failed to collect .java files after decompilation", e);
-        }
-
-        if (javaFiles.isEmpty()) {
-            logger.info("Vineflower failed, attempting decompilation with Krakatau...");
-            try {
-                Path krakatauOutputDir = outputDir.resolve("krakatau_decompiled");
-                Files.createDirectories(krakatauOutputDir);
-                ProcessBuilder pb = new ProcessBuilder(
-                        "python",
-                        "resource/krakatau/decompile.py",
-                        pluginFile.toAbsolutePath().toString(),
-                        "-out",
-                        krakatauOutputDir.toAbsolutePath().toString(),
-                        "-skip"
-                );
-                pb.redirectErrorStream(true);  
-                Process process = pb.start();
-                int exitCode = process.waitFor();
-
-                if (exitCode != 0) {
-                    logger.severe("Krakatau decompilation failed with exit code: " + exitCode);
-                } else {
-                    logger.info("Krakatau decompilation finished. Collecting files...");
-                    try (Stream<Path> walk = Files.walk(krakatauOutputDir)) {
-                        javaFiles = walk.filter(p -> p.toString().endsWith(".java")).collect(Collectors.toList());
-                        logger.info("Collected " + javaFiles.size() + " java files from Krakatau.");
-                    }
-                }
-            } catch (IOException | InterruptedException e) {
-                logger.log(java.util.logging.Level.SEVERE, "Krakatau execution failed", e);
-            }
-        }
-
-        return new DecompilationResult(javaFiles, new HashMap<>(), outputDir);
+        return decompilerManager.decompile(pluginFile, specificCache);
     }
 
     private boolean isDirEmpty(final Path directory) throws IOException {
