@@ -112,6 +112,7 @@ public class DecompilerManager {
             }
         }
 
+        
         String classpath = System.getProperty("java.class.path");
         String separator = System.getProperty("path.separator");
         Arrays.stream(classpath.split(separator))

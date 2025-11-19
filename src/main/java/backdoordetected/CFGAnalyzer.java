@@ -36,8 +36,7 @@ public class CFGAnalyzer {
                 String finding = String.format(
                         "HIGH: Unreachable code detected in class '%s', method '%s'. This could be a hidden payload.",
                         className.replace('/', '.'),
-                        methodNode.name
-                );
+                        methodNode.name);
                 findings.add(finding);
                 break;
             }
@@ -74,18 +73,20 @@ public class CFGAnalyzer {
                 for (LabelNode label : lookupSwitch.labels) {
                     currentBlock.successors.add(blocks.get(label));
                 }
-            } else if (insn.getOpcode() != Opcodes.ATHROW && insn.getOpcode() < Opcodes.IRETURN || insn.getOpcode() > Opcodes.RETURN) {
+            } else if (insn.getOpcode() != Opcodes.ATHROW && insn.getOpcode() < Opcodes.IRETURN
+                    || insn.getOpcode() > Opcodes.RETURN) {
                 if (insn.getNext() != null) {
-                    currentBlock.successors.add(blocks.get(insn.getNext())); 
+                    currentBlock.successors.add(blocks.get(insn.getNext()));
                 }
             }
         }
         return blocks;
     }
 
-    private static class BasicBlock {
+    public static class BasicBlock {
         final AbstractInsnNode start;
         final List<BasicBlock> successors = new ArrayList<>();
+        final List<BasicBlock> predecessors = new ArrayList<>();
 
         BasicBlock(AbstractInsnNode start) {
             this.start = start;

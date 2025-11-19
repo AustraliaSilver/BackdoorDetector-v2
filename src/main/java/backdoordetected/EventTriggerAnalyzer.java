@@ -3,8 +3,15 @@ package backdoordetected;
 import com.github.javaparser.ParseProblemException;
 import com.github.javaparser.StaticJavaParser;
 import com.github.javaparser.ast.CompilationUnit;
+import com.github.javaparser.ast.Node;
 import com.github.javaparser.ast.body.MethodDeclaration;
+import com.github.javaparser.ast.expr.ArrayCreationExpr;
+import com.github.javaparser.ast.expr.ArrayInitializerExpr;
+import com.github.javaparser.ast.expr.CharLiteralExpr;
 import com.github.javaparser.ast.expr.MethodCallExpr;
+import com.github.javaparser.ast.expr.ObjectCreationExpr;
+import com.github.javaparser.ast.expr.StringLiteralExpr;
+import com.github.javaparser.ast.type.PrimitiveType;
 import com.github.javaparser.ast.visitor.VoidVisitorAdapter;
 
 import java.io.IOException;
@@ -12,16 +19,11 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.*;
-import java.util.regex.Matcher;
-import java.util.regex.Pattern;
 import java.util.logging.Logger;
 
 public class EventTriggerAnalyzer {
 
     private static final Logger logger = Logger.getLogger(EventTriggerAnalyzer.class.getName());
-
-    private static final Pattern BASE64_DECODE_PATTERN = Pattern.compile("Base64\\.getDecoder\\(\\)\\.decode\\(\"([a-zA-Z0-9+/=]+)\"\\)");
-    private static final Pattern CHAR_ARRAY_STRING_PATTERN = Pattern.compile("new String\\s*\\(\\s*new char\\[\\]\\s*\\{([^}]+)\\}");
 
     private static final Map<String, String> DANGEROUS_CALLS = new HashMap<>();
     static {
@@ -44,10 +46,11 @@ public class EventTriggerAnalyzer {
 
         for (Path file : javaFiles) {
             try {
-                String originalContent = Files.readString(file, StandardCharsets.UTF_8);
-                String deobfuscatedContent = preprocessContent(originalContent);
+                CompilationUnit cu = StaticJavaParser.parse(file);
 
-                CompilationUnit cu = StaticJavaParser.parse(deobfuscatedContent);
+                
+                cu.accept(new DeobfuscationVisitor(), null);
+
                 cu.accept(new EventTriggerVisitor(file, allFindings), null);
             } catch (IOException e) {
                 logger.warning("Failed to read file: " + file.getFileName());
@@ -66,7 +69,8 @@ public class EventTriggerAnalyzer {
                     long estimatedTimeRemainingNs = (long) (remainingFiles * timePerFile);
                     long etaSeconds = estimatedTimeRemainingNs / 1_000_000_000;
 
-                    System.out.printf("\r[PROGRESS] Analyzing source files: %d%% (%d/%d). ETA: ~%d seconds...", currentProgress, processedCount, totalFiles, etaSeconds);
+                    System.out.printf("\r[PROGRESS] Analyzing source files: %d%% (%d/%d). ETA: ~%d seconds...",
+                            currentProgress, processedCount, totalFiles, etaSeconds);
                 }
                 lastReportedProgress = currentProgress;
             }
@@ -94,7 +98,10 @@ public class EventTriggerAnalyzer {
                     String methodName = call.getNameAsString();
                     if (DANGEROUS_CALLS.containsKey(methodName)) {
                         String description = DANGEROUS_CALLS.get(methodName);
-                        methodFindings.add("Found suspicious method call '" + methodName + "' inside event handler: " + description);
+                        String args = call.getArguments().toString();
+                        methodFindings.add("Found suspicious method call '" + methodName + "' with args " + args
+                                + " inside event handler: "
+                                + description);
                     }
                 });
 
@@ -105,46 +112,103 @@ public class EventTriggerAnalyzer {
         }
     }
 
-    private String preprocessContent(String content) {
-        String previousContent = "";
-        String currentContent = content;
-        int maxIterations = 5;
-        int iteration = 0;
+    
+    private static class DeobfuscationVisitor extends VoidVisitorAdapter<Void> {
+        private final Map<String, String> stringConstants = new HashMap<>();
 
-        do {
-            previousContent = currentContent;
+        @Override
+        public void visit(MethodDeclaration n, Void arg) {
+            stringConstants.clear();
+            super.visit(n, arg);
+        }
 
-            StringBuffer sb = new StringBuffer();
-            Matcher base64Matcher = BASE64_DECODE_PATTERN.matcher(previousContent);
-            while (base64Matcher.find()) {
-                try {
-                    String encodedString = base64Matcher.group(1);
-                    byte[] decodedBytes = Base64.getDecoder().decode(encodedString);
-                    String decodedString = new String(decodedBytes, StandardCharsets.UTF_8);
-                    base64Matcher.appendReplacement(sb, Matcher.quoteReplacement("\"" + decodedString + "\""));
-                } catch (IllegalArgumentException e) {  }
+        @Override
+        public void visit(com.github.javaparser.ast.body.VariableDeclarator n, Void arg) {
+            super.visit(n, arg);
+            if (n.getType().asString().equals("String") && n.getInitializer().isPresent()) {
+                n.getInitializer().get().ifStringLiteralExpr(s -> {
+                    stringConstants.put(n.getNameAsString(), s.asString());
+                });
             }
-            base64Matcher.appendTail(sb);
-            currentContent = sb.toString();
+        }
 
-            sb.setLength(0);
-            Matcher charArrayMatcher = CHAR_ARRAY_STRING_PATTERN.matcher(currentContent);
-            while (charArrayMatcher.find()) {
-                String charList = charArrayMatcher.group(1);
-                String[] chars = charList.replace("'", "").replace("\"", "").split(",");
-                StringBuilder resolvedString = new StringBuilder();
-                for (String c : chars) {
-                    resolvedString.append(c.trim());
-                }
-                charArrayMatcher.appendReplacement(sb, Matcher.quoteReplacement("\"" + resolvedString.toString() + "\""));
+        @Override
+        public void visit(MethodCallExpr n, Void arg) {
+            super.visit(n, arg);
+
+            
+            if ("decode".equals(n.getNameAsString()) && n.getArguments().size() == 1) {
+                n.getScope().ifPresent(scope -> {
+                    if (scope.isMethodCallExpr()) {
+                        MethodCallExpr scopeCall = scope.asMethodCallExpr();
+                        if ("getDecoder".equals(scopeCall.getNameAsString()) && scopeCall.getScope().isPresent()) {
+                            String scopeName = scopeCall.getScope().get().toString();
+                            if ("Base64".equals(scopeName)) {
+                                try {
+                                    String encoded = null;
+                                    if (n.getArgument(0).isStringLiteralExpr()) {
+                                        encoded = n.getArgument(0).asStringLiteralExpr().asString();
+                                    } else if (n.getArgument(0).isNameExpr()) {
+                                        String varName = n.getArgument(0).asNameExpr().getNameAsString();
+                                        encoded = stringConstants.get(varName);
+                                    }
+
+                                    if (encoded != null) {
+                                        byte[] decodedBytes = Base64.getDecoder().decode(encoded);
+                                        String decodedString = new String(decodedBytes, StandardCharsets.UTF_8);
+
+                                        
+                                        if (n.getParentNode().isPresent()
+                                                && n.getParentNode().get() instanceof ObjectCreationExpr) {
+                                            ObjectCreationExpr parent = (ObjectCreationExpr) n.getParentNode().get();
+                                            if (parent.getType().getNameAsString().equals("String")) {
+                                                parent.replace(new StringLiteralExpr(decodedString));
+                                                return;
+                                            }
+                                        }
+
+                                        
+                                        
+                                        n.replace(new StringLiteralExpr(decodedString));
+                                    }
+                                } catch (IllegalArgumentException e) {
+                                    
+                                }
+                            }
+                        }
+                    }
+                });
             }
-            charArrayMatcher.appendTail(sb);
-            currentContent = sb.toString();
+        }
 
-            iteration++;
-        } while (!currentContent.equals(previousContent) && iteration < maxIterations);
+        @Override
+        public void visit(ObjectCreationExpr n, Void arg) {
+            super.visit(n, arg);
 
-        return currentContent;
+            
+            if ("String".equals(n.getType().getNameAsString()) && n.getArguments().size() == 1) {
+                n.getArgument(0).ifArrayCreationExpr(arrayCreationExpr -> {
+                    if (arrayCreationExpr.getElementType().isPrimitiveType() && arrayCreationExpr.getElementType()
+                            .asPrimitiveType().getType() == PrimitiveType.Primitive.CHAR) {
+                        arrayCreationExpr.getInitializer().ifPresent(initializer -> {
+                            StringBuilder sb = new StringBuilder();
+                            boolean allChars = true;
+                            for (Node value : initializer.getValues()) {
+                                if (value instanceof CharLiteralExpr) {
+                                    sb.append(((CharLiteralExpr) value).asChar());
+                                } else {
+                                    allChars = false;
+                                    break;
+                                }
+                            }
+                            if (allChars) {
+                                n.replace(new StringLiteralExpr(sb.toString()));
+                            }
+                        });
+                    }
+                });
+            }
+        }
     }
 
     public record AnalysisResult(Map<Path, List<String>> findings, List<Path> failedFiles) {

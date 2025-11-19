@@ -17,14 +17,15 @@ import java.util.logging.SimpleFormatter;
 
 public class Main {
     private static final Logger logger = Logger.getLogger(Main.class.getName());
-    private static final String VERSION = "1.0.0-Phase1";
+    private static final String VERSION = "1.0.2";
     private static final String CONFIG_FILE_NAME = "config.properties";
-    
+
     private static String apiKey1;
     private static String model1;
     private static String apiKey2;
     private static String model2;
     private static boolean enableGemini2;
+
     public static void main(String[] args) {
         setupLogger();
         printBanner();
@@ -64,7 +65,7 @@ public class Main {
             logger.severe("Plugin file not found: " + pluginPath);
             return;
         }
-        
+
         if (!pluginFile.getName().endsWith(".jar")) {
             logger.severe("Invalid file type. Expected .jar file, got: " + pluginFile.getName());
             return;
@@ -84,13 +85,13 @@ public class Main {
     private static void printUsage() {
         System.out.println("USAGE:");
         System.out.println("  java -jar BackdoorDetect.jar scan <plugin-path> [mode]\n");
-        
+
         System.out.println("EXAMPLES:");
         System.out.println("  java -jar BackdoorDetect.jar scan plugin.jar");
         System.out.println("  java -jar BackdoorDetect.jar scan plugin.jar AI_MODERN\n");
-        
+
         ScanMode.printAllModes();
-        
+
         System.out.println("RECOMMENDATIONS:");
         System.out.println("  • Best accuracy: AI_MODERN (requires API key)\n");
     }
@@ -128,13 +129,13 @@ public class Main {
             try (FileOutputStream fos = new FileOutputStream(configFile)) {
                 Properties defaultProps = new Properties();
                 defaultProps.setProperty("gemini_api_key", "YOUR_FIRST_API_KEY");
-                defaultProps.setProperty("gemini_model", "gemini-2.0-flash-exp");
+                defaultProps.setProperty("gemini_model", "gemini-2.5-pro");
                 defaultProps.setProperty("enable_gemini_2", "true");
                 defaultProps.setProperty("gemini_api_key_2", "YOUR_SECOND_API_KEY");
-                defaultProps.setProperty("gemini_model_2", "gemini-2.0-flash-exp");
+                defaultProps.setProperty("gemini_model_2", "gemini-2.5-pro");
                 defaultProps.setProperty("codeql_executable_path", "");
                 defaultProps.store(fos, "Backdoor Detector Configuration - Phase 1");
-                
+
                 System.out.println("Created config.properties file");
                 System.out.println("Add your Gemini API keys to use AI features\n");
                 return false;
@@ -184,14 +185,14 @@ public class Main {
     }
 
     private static boolean isApiKeyConfigured() {
-        return apiKey2 != null && 
-               !apiKey2.isEmpty() && 
-               !apiKey2.equals("YOUR_SECOND_API_KEY") &&
-               !apiKey2.startsWith("YOUR_");
+        return apiKey2 != null &&
+                !apiKey2.isEmpty() &&
+                !apiKey2.equals("YOUR_SECOND_API_KEY") &&
+                !apiKey2.startsWith("YOUR_");
     }
 
-    private static void startSequentialScan(BlockingQueue<PluginWorker.PrioritizedFile> queue, 
-                                           ScanMode mode, String pluginName) {
+    private static void startSequentialScan(BlockingQueue<PluginWorker.PrioritizedFile> queue,
+            ScanMode mode, String pluginName) {
         CountDownLatch latch = new CountDownLatch(1);
         ExecutorService executor = Executors.newFixedThreadPool(1);
 
@@ -211,18 +212,17 @@ public class Main {
         }
     }
 
-    private static void startParallelScan(BlockingQueue<PluginWorker.PrioritizedFile> queue, 
-                                         ScanMode mode, String pluginName) {
+    private static void startParallelScan(BlockingQueue<PluginWorker.PrioritizedFile> queue,
+            ScanMode mode, String pluginName) {
         int numThreads = Math.max(1, Runtime.getRuntime().availableProcessors() / 2);
         logger.info("Starting parallel scan with " + numThreads + " worker threads.");
-        
+
         ExecutorService executor = Executors.newFixedThreadPool(numThreads);
         CountDownLatch latch = new CountDownLatch(numThreads);
 
         for (int i = 0; i < numThreads; i++) {
             executor.submit(new PluginWorker(queue, null, null, "WORKER-" + (i + 1), mode, latch));
         }
-
 
         try {
             latch.await();

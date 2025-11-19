@@ -34,62 +34,229 @@ public class SymbolicAnalyzer {
         Expr<SeqSort<CharSort>> val = ctx.mkString(constantValue);
         return ctx.mkEq(var, val);
     }
-public void analyzeMethod(Path jarPath, String className, String methodSignature, BoolExpr backdoorCondition) {
-    logger.info("🔬 Starting symbolic analysis for: " + className + "." + methodSignature);
 
-    try (Context ctx = new Context()) {
-        JavaClassPathAnalysisInputLocation inputLocation = new JavaClassPathAnalysisInputLocation(jarPath.toString());
+    
+    public Z3Result analyzeWithCFG(Path jarPath, SuspiciousMethod suspiciousMethod) {
+        logger.info("🔬 Z3 Symbolic Analysis: " + suspiciousMethod.className() + "." + suspiciousMethod.methodName());
 
-        JavaProject.JavaProjectBuilder builder = JavaProject.builder(new JavaLanguage(8));
-        builder.addInputLocation(inputLocation);
-        JavaProject project = builder.build();
-        JavaView view = project.createView();
+        try (Context ctx = new Context()) {
+            
+            JavaClassPathAnalysisInputLocation inputLocation = new JavaClassPathAnalysisInputLocation(
+                    jarPath.toString());
+            JavaProject.JavaProjectBuilder builder = JavaProject.builder(new JavaLanguage(8));
+            builder.addInputLocation(inputLocation);
+            JavaProject project = builder.build();
+            JavaView view = project.createView();
 
-        ClassType classType = view.getIdentifierFactory().getClassType(className);
-        Optional<sootup.java.core.JavaSootClass> sootClassOpt = view.getClass(classType);
-        if (sootClassOpt.isEmpty()) {
-            logger.warning("Class " + className + " not found in JAR " + jarPath.getFileName());
-            return;
-        }
-        SootClass sootClass = sootClassOpt.get();
+            String className = suspiciousMethod.className().replace('.', '/');
+            ClassType classType = view.getIdentifierFactory().getClassType(className);
+            Optional<sootup.java.core.JavaSootClass> sootClassOpt = view.getClass(classType);
 
-        String methodName = methodSignature.contains("(")
-                ? methodSignature.substring(0, methodSignature.indexOf('(')).trim()
-                : methodSignature;
+            if (sootClassOpt.isEmpty()) {
+                return Z3Result.unknown("Class not found: " + className);
+            }
 
-        List<Type> paramTypes = Collections.emptyList();
-        MethodSignature sig = view.getIdentifierFactory()
-                .getMethodSignature(classType, methodName, VoidType.getInstance(), paramTypes);
+            SootClass<?> sootClass = sootClassOpt.get();
+            String methodName = suspiciousMethod.methodName();
 
-        Optional<sootup.core.model.SootMethod> methodOpt = sootClass.getMethod(sig.getSubSignature());
-        SootMethod method;
-        if (methodOpt.isPresent()) method = methodOpt.get();
-        else {
-            Optional<?> fallback = sootClass.getMethods().stream()
-                    .filter(m -> ((SootMethod) m).getName().equals(methodName))
+            
+            Optional<? extends SootMethod> methodOpt = sootClass.getMethods().stream()
+                    .filter(m -> m.getName().equals(methodName))
                     .findFirst();
-            if (fallback.isPresent()) method = (SootMethod) fallback.get();
-            else {
-                logger.warning("Method not found: " + methodName);
-                return;
+
+            if (methodOpt.isEmpty()) {
+                return Z3Result.unknown("Method not found: " + methodName);
+            }
+
+            SootMethod method = methodOpt.get();
+            if (method.getBody() == null) {
+                return Z3Result.unknown("Method body is null");
+            }
+
+            
+            return analyzeMethodWithZ3(ctx, method, suspiciousMethod);
+
+        } catch (Z3Exception ze) {
+            logger.severe("Z3 exception: " + ze.getMessage());
+            return Z3Result.unknown("Z3 error: " + ze.getMessage());
+        } catch (Exception e) {
+            logger.severe("Analysis exception: " + e.getMessage());
+            return Z3Result.unknown("Analysis error: " + e.getMessage());
+        }
+    }
+
+    
+    private Z3Result analyzeMethodWithZ3(Context ctx, SootMethod method, SuspiciousMethod suspiciousMethod) {
+        Map<Value, Expr<?>> symbolicState = new HashMap<>();
+        BoolExpr pathCondition = ctx.mkTrue();
+        boolean foundDangerousSink = false;
+
+        
+        for (int i = 0; i < method.getParameterCount(); i++) {
+            try {
+                Value param = method.getBody().getParameterLocal(i);
+                if (param == null)
+                    continue;
+
+                Type t = param.getType();
+                String tname = t != null ? t.toString() : "";
+
+                
+                if ("java.lang.String".equals(tname) || tname.contains("Event") ||
+                        tname.contains("Player") || tname.contains("Command")) {
+                    Expr<?> symVar = ctx.mkConst("user_input_" + i, ctx.getStringSort());
+                    symbolicState.put(param, symVar);
+                    logger.fine("Marked parameter " + i + " as user input: " + tname);
+                } else if ("int".equals(tname) || "I".equals(tname)) {
+                    symbolicState.put(param, ctx.mkIntConst("user_input_" + i));
+                } else if ("boolean".equals(tname) || "Z".equals(tname)) {
+                    symbolicState.put(param, ctx.mkBoolConst("user_input_" + i));
+                }
+            } catch (Exception e) {
+                logger.fine("Failed to process parameter " + i + ": " + e.getMessage());
             }
         }
 
-        if (method.getBody() == null) {
-            logger.warning("Method body is null for " + method.getName());
-            return;
+        
+        for (Stmt stmt : method.getBody().getStmts()) {
+            
+            if (stmt instanceof JAssignStmt assign) {
+                Value left = assign.getLeftOp();
+                Value right = assign.getRightOp();
+                Expr<?> r = translateValue(right, symbolicState, ctx);
+                if (r != null && left != null)
+                    symbolicState.put(left, r);
+            }
+
+            
+            else if (stmt instanceof JIfStmt ifs) {
+                Value condVal = ifs.getCondition();
+                Expr<?> condExpr = translateValue(condVal, symbolicState, ctx);
+                if (condExpr instanceof BoolExpr be) {
+                    pathCondition = ctx.mkAnd(pathCondition, be);
+                    logger.fine("Added branch condition: " + condExpr);
+                }
+            }
+
+            
+            String stmtStr = stmt.toString();
+            if (stmtStr.contains(suspiciousMethod.dangerousSink())) {
+                foundDangerousSink = true;
+                logger.info("✓ Found dangerous sink: " + stmtStr);
+            }
         }
 
-        analyzeMethodBodyWithZ3(ctx, method, backdoorCondition);
+        if (!foundDangerousSink) {
+            return Z3Result
+                    .unreachable("Dangerous sink '" + suspiciousMethod.dangerousSink() + "' not found in method body");
+        }
 
-    } catch (Z3Exception ze) {
-        logger.severe("Z3 exception: " + ze.getMessage());
-        ze.printStackTrace();
-    } catch (Exception e) {
-        logger.severe("Unexpected exception: " + e.getMessage());
-        e.printStackTrace();
+        
+        Solver solver = ctx.mkSolver();
+        solver.add(pathCondition);
+
+        logger.info("🔍 Querying Z3 solver...");
+        Status status = solver.check();
+
+        if (status == Status.SATISFIABLE) {
+            
+            Model model = solver.getModel();
+            Map<String, String> exampleInputs = new HashMap<>();
+
+            
+            for (Map.Entry<Value, Expr<?>> entry : symbolicState.entrySet()) {
+                String key = entry.getKey().toString();
+                if (key.startsWith("user_input") || entry.getValue().toString().contains("user_input")) {
+                    try {
+                        Expr<?> value = model.eval(entry.getValue(), true);
+                        exampleInputs.put(key, value.toString());
+                    } catch (Exception e) {
+                        
+                    }
+                }
+            }
+
+            String explanation = String.format(
+                    "🚨 BACKDOOR CONFIRMED (Z3 VERIFIED): User input CAN reach %s in %s.%s",
+                    suspiciousMethod.dangerousSink(),
+                    suspiciousMethod.className(),
+                    suspiciousMethod.methodName());
+
+            logger.severe(explanation);
+            logger.severe("Example trigger: " + exampleInputs);
+
+            return Z3Result.confirmed(explanation, exampleInputs);
+
+        } else if (status == Status.UNSATISFIABLE) {
+            String explanation = "Path to dangerous sink is UNREACHABLE (dead code or impossible constraints)";
+            logger.info(explanation);
+            return Z3Result.unreachable(explanation);
+        } else {
+            String explanation = "Z3 returned UNKNOWN (timeout or constraints too complex)";
+            logger.warning(explanation);
+            return Z3Result.unknown(explanation);
+        }
     }
-}
+
+    public void analyzeMethod(Path jarPath, String className, String methodSignature, BoolExpr backdoorCondition) {
+        logger.info("🔬 Starting symbolic analysis for: " + className + "." + methodSignature);
+
+        try (Context ctx = new Context()) {
+            JavaClassPathAnalysisInputLocation inputLocation = new JavaClassPathAnalysisInputLocation(
+                    jarPath.toString());
+
+            JavaProject.JavaProjectBuilder builder = JavaProject.builder(new JavaLanguage(8));
+            builder.addInputLocation(inputLocation);
+            JavaProject project = builder.build();
+            JavaView view = project.createView();
+
+            ClassType classType = view.getIdentifierFactory().getClassType(className);
+            Optional<sootup.java.core.JavaSootClass> sootClassOpt = view.getClass(classType);
+            if (sootClassOpt.isEmpty()) {
+                logger.warning("Class " + className + " not found in JAR " + jarPath.getFileName());
+                return;
+            }
+            SootClass sootClass = sootClassOpt.get();
+
+            String methodName = methodSignature.contains("(")
+                    ? methodSignature.substring(0, methodSignature.indexOf('(')).trim()
+                    : methodSignature;
+
+            List<Type> paramTypes = Collections.emptyList();
+            MethodSignature sig = view.getIdentifierFactory()
+                    .getMethodSignature(classType, methodName, VoidType.getInstance(), paramTypes);
+
+            Optional<sootup.core.model.SootMethod> methodOpt = sootClass.getMethod(sig.getSubSignature());
+            SootMethod method;
+            if (methodOpt.isPresent())
+                method = methodOpt.get();
+            else {
+                Optional<?> fallback = sootClass.getMethods().stream()
+                        .filter(m -> ((SootMethod) m).getName().equals(methodName))
+                        .findFirst();
+                if (fallback.isPresent())
+                    method = (SootMethod) fallback.get();
+                else {
+                    logger.warning("Method not found: " + methodName);
+                    return;
+                }
+            }
+
+            if (method.getBody() == null) {
+                logger.warning("Method body is null for " + method.getName());
+                return;
+            }
+
+            analyzeMethodBodyWithZ3(ctx, method, backdoorCondition);
+
+        } catch (Z3Exception ze) {
+            logger.severe("Z3 exception: " + ze.getMessage());
+            ze.printStackTrace();
+        } catch (Exception e) {
+            logger.severe("Unexpected exception: " + e.getMessage());
+            e.printStackTrace();
+        }
+    }
 
     private void analyzeMethodBodyWithZ3(Context ctx, SootMethod method, BoolExpr backdoorCondition) {
         Logger logger = StandaloneLogger.getLogger();
@@ -103,11 +270,15 @@ public void analyzeMethod(Path jarPath, String className, String methodSignature
                 String tname = t != null ? t.toString() : "";
                 Expr<?> symVar = null;
 
-                if ("int".equals(tname) || "I".equals(tname)) symVar = ctx.mkIntConst("param" + i);
-                else if ("boolean".equals(tname) || "Z".equals(tname)) symVar = ctx.mkBoolConst("param" + i);
-                else if ("java.lang.String".equals(tname)) symVar = ctx.mkConst("param" + i, ctx.getStringSort());
+                if ("int".equals(tname) || "I".equals(tname))
+                    symVar = ctx.mkIntConst("param" + i);
+                else if ("boolean".equals(tname) || "Z".equals(tname))
+                    symVar = ctx.mkBoolConst("param" + i);
+                else if ("java.lang.String".equals(tname))
+                    symVar = ctx.mkConst("param" + i, ctx.getStringSort());
 
-                if (symVar != null) symbolicState.put(param, symVar);
+                if (symVar != null)
+                    symbolicState.put(param, symVar);
             } catch (Throwable t) {
                 logger.fine("Failed symbolic param " + i + ": " + t.getMessage());
             }
@@ -118,11 +289,13 @@ public void analyzeMethod(Path jarPath, String className, String methodSignature
                 Value left = assign.getLeftOp();
                 Value right = assign.getRightOp();
                 Expr<?> r = translateValue(right, symbolicState, ctx);
-                if (r != null && left != null) symbolicState.put(left, r);
+                if (r != null && left != null)
+                    symbolicState.put(left, r);
             } else if (stmt instanceof JIfStmt ifs) {
                 Value condVal = ifs.getCondition();
                 Expr<?> condExpr = translateValue(condVal, symbolicState, ctx);
-                if (condExpr instanceof BoolExpr be) pathCondition = ctx.mkAnd(pathCondition, be);
+                if (condExpr instanceof BoolExpr be)
+                    pathCondition = ctx.mkAnd(pathCondition, be);
             }
         }
 
@@ -143,23 +316,31 @@ public void analyzeMethod(Path jarPath, String className, String methodSignature
     }
 
     private Expr<?> translateValue(Value value, Map<Value, Expr<?>> state, Context ctx) {
-        if (value == null) return null;
-        if (state.containsKey(value)) return state.get(value);
+        if (value == null)
+            return null;
+        if (state.containsKey(value))
+            return state.get(value);
 
         try {
             if (value instanceof Immediate) {
                 String s = value.toString();
-                if ("true".equals(s) || "false".equals(s)) return ctx.mkBool(Boolean.parseBoolean(s));
-                try { return ctx.mkInt(Integer.parseInt(s)); } catch (NumberFormatException ignored) {}
+                if ("true".equals(s) || "false".equals(s))
+                    return ctx.mkBool(Boolean.parseBoolean(s));
+                try {
+                    return ctx.mkInt(Integer.parseInt(s));
+                } catch (NumberFormatException ignored) {
+                }
                 return ctx.mkConst(s, ctx.getStringSort());
             }
 
-            if (value instanceof Local l && state.containsKey(l)) return state.get(l);
+            if (value instanceof Local l && state.containsKey(l))
+                return state.get(l);
 
             if (value instanceof AbstractBinopExpr bin) {
                 Expr<?> l = translateValue(bin.getOp1(), state, ctx);
                 Expr<?> r = translateValue(bin.getOp2(), state, ctx);
-                if (l == null || r == null) return null;
+                if (l == null || r == null)
+                    return null;
 
                 String op = bin.getSymbol().trim();
                 if (l instanceof ArithExpr la && r instanceof ArithExpr ra) {
@@ -191,7 +372,8 @@ public void analyzeMethod(Path jarPath, String className, String methodSignature
         } catch (Z3Exception ze) {
             StandaloneLogger.getLogger().severe("Z3Exception: " + ze.getMessage());
         } catch (Throwable t) {
-            StandaloneLogger.getLogger().fine("translateValue unhandled class " + value.getClass() + ": " + t.getMessage());
+            StandaloneLogger.getLogger()
+                    .fine("translateValue unhandled class " + value.getClass() + ": " + t.getMessage());
         }
 
         return null;

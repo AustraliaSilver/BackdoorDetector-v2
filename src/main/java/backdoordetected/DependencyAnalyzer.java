@@ -91,7 +91,6 @@ public class DependencyAnalyzer {
         shutdownExecutor();
     }
 
-
     private CompletableFuture<Boolean> queryOsvAsync(Dependency dep) {
         return CompletableFuture.supplyAsync(() -> {
             try {

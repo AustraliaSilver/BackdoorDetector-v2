@@ -423,7 +423,6 @@ public class PluginWorker implements Runnable {
         }
     }
 
-
     private List<Path> extractAllFiles(Path pluginFile, Path outputDir) throws IOException {
         List<Path> classFiles = new ArrayList<>();
         try (ZipInputStream zis = new ZipInputStream(Files.newInputStream(pluginFile))) {

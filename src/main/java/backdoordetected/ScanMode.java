@@ -1,55 +1,31 @@
 package backdoordetected;
 
-/**
- * Available scan modes for plugin analysis
- * Each mode uses different detection techniques and analyzers
- * 
- * @version 1.0 - Phase 1 Update
- */
 public enum ScanMode {
-    /**
-     * AI_MODERN
-     */
+    
     AI_MODERN("Event detection + AI validation", true, true),
 
-    /**
-     * AI_BACKDOOR_FOCUS
-     */
+    
     AI_BACKDOOR_FOCUS("AI analysis focused on hidden backdoors", true, true),
     
-    /**
-     * AI
-     */
+    
     AI("Full AI analysis", false, true),
     
-    /**
-     * MODERN
-     */
+    
     MODERN("Event handler pattern scanning", true, false),
     
-    /**
-     * BYTECODE
-     */
+    
     BYTECODE("Bytecode-level analysis", true, false),
     
-    /**
-     * SANDBOX
-     */
+    
     SANDBOX("Event behavioral analysis", true, false),
     
-    /**
-     * DATA_FLOW
-     */
+    
     DATA_FLOW("Inter-procedural taint tracking", false, false),
 
-    /**
-     * DEPENDENCY
-     */
+    
     DEPENDENCY("Vulnerable dependency scanning", true, false),
 
-    /**
-     * SYMBOLIC
-     */
+    
     SYMBOLIC("Symbolic execution with Z3", false, false);    
 
     private final String description;
