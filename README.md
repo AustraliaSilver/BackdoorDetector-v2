@@ -3,7 +3,7 @@
   
 ## 🛡️ BackdoorDetector-v2 Overview 
 
-BackdoorDetector is a professional tool designed to analyze the source code of Minecraft plugins (.jar files) in order to detect backdoors, malware, and hidden malicious behaviors within plugins before installing them on the server. The system leverages advanced AI (Gemini), the VineFlower/Krakatau decompiler, and a multi-threaded scanning mechanism to ensure maximum speed and accuracy.
+BackdoorDetector is a professional tool designed to analyze the source code of Minecraft plugins (.jar files) in order to detect backdoors, malware, and hidden malicious behaviors within plugins before installing them on the server. The system leverages advanced AI (Gemini), the VineFlower decompiler, and a multi-threaded scanning mechanism to ensure maximum speed and accuracy.
 
 ## ✨ Key Features
 🔍 1. Backdoor Scanning with AI (Gemini)
