@@ -160,12 +160,39 @@ public class PluginWorker implements Runnable {
 
     private void processSequentialAi(Path pluginPath, Path ignoredTempBaseDir) throws IOException {
         logger.info("[" + this.workerName + "] Starting AI-sequence for " + pluginPath.getFileName());
-        DecompilationResult decomp = decompilePluginWithCache(pluginPath);
+
+        Path pathToAnalyze = pluginPath;
+        try {
+            Path deobfuscatedJar = deobfuscationPipeline.deobfuscate(pluginPath);
+            if (!deobfuscatedJar.equals(pluginPath)) {
+                pathToAnalyze = deobfuscatedJar;
+            }
+        } catch (Exception e) {
+            logger.warning("Deobfuscation failed: " + e.getMessage());
+        }
+
+        logger.info(
+                "Scanning for known backdoor signatures (L.M.X, OpenEctasy) on " + pathToAnalyze.getFileName() + "...");
+        LMXBackdoorDetector.BackdoorScanResult backdoorScan = LMXBackdoorDetector.analyze(pathToAnalyze);
+
+        if (backdoorScan.hasAnyBackdoor()) {
+            logger.warning("═══════════════════════════════════════════════════════");
+            logger.warning("CRITICAL: KNOWN BACKDOOR SIGNATURE DETECTED!");
+            if (backdoorScan.hasLMXBackdoor) {
+                logger.warning("  → L.M.X backdoor pattern found");
+            }
+            if (backdoorScan.hasOpenEctasy) {
+                logger.warning("  → OpenEctasy malware pattern found");
+            }
+            logger.warning("═══════════════════════════════════════════════════════");
+        }
+
+        DecompilationResult decomp = decompilePluginWithCache(pathToAnalyze);
 
         List<Path> javaFiles = decomp.javaFiles();
         Path workingDir = decomp.workingDirectory();
         if (javaFiles.isEmpty()) {
-            logger.warning("No Java files found after decompilation for: " + pluginPath.getFileName());
+            logger.warning("No Java files found after decompilation for: " + pathToAnalyze.getFileName());
             return;
         }
 
@@ -206,6 +233,17 @@ public class PluginWorker implements Runnable {
             bcFindings.forEach(finding -> logger.info("  -> " + finding));
         }
 
+        boolean lmxStringLiteralFound = findLmxStringLiteral(javaFiles, "L/M/X");
+        if (lmxStringLiteralFound) {
+            eventFindings.computeIfAbsent(Paths.get("LMX_STRING_LITERAL"), k -> new ArrayList<>())
+                    .add("CRITICAL: L.M.X backdoor pattern found as string literal in decompiled code.");
+        }
+
+        if (backdoorScan.hasAnyBackdoor()) {
+            eventFindings.computeIfAbsent(Paths.get("KNOWN_BACKDOOR_SIGNATURES"), k -> new ArrayList<>())
+                    .addAll(backdoorScan.findings);
+        }
+
         if (!failedFiles.isEmpty()) {
             logger.warning("Syntax errors in " + failedFiles.size() + " files. Falling back to bytecode.");
             List<Path> classesToCheck = failedFiles.stream()
@@ -223,20 +261,10 @@ public class PluginWorker implements Runnable {
             logger.info("No suspicious triggers found; skipping AI analyze.");
             return;
         }
-        List<String> specialKeys = Arrays.asList("BYTECODE_ANALYSIS", "BYTECODE_FALLBACK");
+        List<String> specialKeys = Arrays.asList("BYTECODE_ANALYSIS", "BYTECODE_FALLBACK", "LMX_STRING_LITERAL");
         List<Path> suspiciousFiles = eventFindings.keySet().stream()
                 .filter(p -> !specialKeys.contains(p.getFileName().toString()))
                 .collect(Collectors.toList());
-
-        Path pathToAnalyze = pluginPath;
-        try {
-            Path deobfuscatedJar = deobfuscationPipeline.deobfuscate(pluginPath);
-            if (!deobfuscatedJar.equals(pluginPath)) {
-                pathToAnalyze = deobfuscatedJar;
-            }
-        } catch (Exception e) {
-            logger.warning("Deobfuscation failed: " + e.getMessage());
-        }
         List<String> sanitizedNames = suspiciousFiles.stream()
                 .map(p -> sanitizeForPrompt(p.getFileName().toString()))
                 .collect(Collectors.toList());
@@ -258,6 +286,28 @@ public class PluginWorker implements Runnable {
 
         String aiResult = sendToGemini(pluginPath.getFileName().toString(), prompt);
 
+        if (backdoorScan.hasLMXBackdoor || backdoorScan.hasOpenEctasy || lmxStringLiteralFound) {
+            StringBuilder overrideResult = new StringBuilder();
+            overrideResult.append("**Malicious:** YES\n");
+            overrideResult.append("**Confidence:** 100%%\n");
+            overrideResult.append("**Severity:** CRITICAL\n");
+            overrideResult.append("**Vulnerability Type:** Hardcoded Backdoor\n\n");
+            overrideResult.append("### BRIEF REASONING\n");
+            if (backdoorScan.hasLMXBackdoor) {
+                overrideResult.append(
+                        "- Confirmed: L.M.X backdoor signature detected (sequential L/M/X directory structure).\n");
+            }
+            if (backdoorScan.hasOpenEctasy) {
+                overrideResult.append("- Confirmed: OpenEctasy malware signature detected ('bodyalhoha' directory).\n");
+            }
+            if (lmxStringLiteralFound) {
+                overrideResult.append(
+                        "- Confirmed: L.M.X backdoor pattern found as string literal in decompiled code. This indicates a strong likelihood of the plugin being the L.M.X backdoor itself or a variant.");
+            }
+            overrideResult.append(
+                    "This is an unequivocally known and critical backdoor/malware pattern, regardless of other contextual factors or potential decompiler artifacts. All such detections are treated as highly dangerous.");
+            aiResult = overrideResult.toString();
+        }
         logger.info("╔" + "═".repeat(80) + "╗");
         logger.info("║" + " ".repeat(34) + " AI ANALYSIS RESULT " + " ".repeat(28) + "║");
         logger.info("╠" + "═".repeat(80) + "╣");
@@ -345,6 +395,18 @@ public class PluginWorker implements Runnable {
         public int compareTo(PrioritizedFile o) {
             return Integer.compare(this.depth, o.depth);
         }
+    }
+
+    private boolean findLmxStringLiteral(List<Path> javaFiles, String pattern) throws IOException {
+        Pattern lmxPattern = Pattern.compile(Pattern.quote(pattern), Pattern.CASE_INSENSITIVE);
+        for (Path javaFile : javaFiles) {
+            String content = Files.readString(javaFile, StandardCharsets.UTF_8);
+            if (lmxPattern.matcher(content).find()) {
+                logger.warning("L.M.X string literal '" + pattern + "' found in " + javaFile.getFileName());
+                return true;
+            }
+        }
+        return false;
     }
 
     private String formatEventFindings(Map<Path, List<String>> findings) {
@@ -502,10 +564,15 @@ public class PluginWorker implements Runnable {
                         You are a world-class Minecraft plugin security expert. Your **only mission** is to determine if this plugin contains a **hidden, malicious backdoor**. You must be extremely precise and avoid false positives.
 
                         **CRITICAL INSTRUCTIONS:**
+                        0.  **KNOWN BACKDOOR SIGNATURES (AUTO-DETECT):** If you see these patterns in INITIAL FINDINGS, they are **100%% confirmed backdoors**:
+                            *   **L.M.X backdoor**: Sequential L/M/X directory structure - this is a well-known malware signature
+                            *   **OpenEctasy malware**: 'bodyalhoha' directory - this is a confirmed malware pattern
+                            *   If either is detected, report as **Malicious: YES, Confidence: 100%%, Severity: CRITICAL**
+
                         1.  **PRIMARY GOAL: FIND TRUE BACKDOORS.** A true backdoor is **deceptive and hidden**. Prioritize finding these:
                             *   Is triggered by a **secret, non-obvious action** (e.g., a specific chat message, a hardcoded player name/UUID, joining at a specific time).
                             *   Communicates with **suspicious, hardcoded external servers** (e.g., pastebin, discord webhooks, random IPs) to fetch commands or exfiltrate data.
-                            *   Uses **heavy obfuscation** (e.g., decoding strings from Base64/Hex/byte arrays) specifically to hide malicious keywords like `setOp`, `exec`, or `dispatchCommand`.
+                            *   Uses **heavy obfuscation** (e.g., decoding strings from Base64/Hex/byte arrays) specifical
 
                         2.  **SECONDARY GOAL: IDENTIFY CONFIGURABLE FEATURES THAT CAN BE ABUSED.** These are **NOT backdoors**, but are worth noting.
                             *   A feature is **NOT a backdoor** if it requires a server administrator to edit a file (`.yml`, `.json`, etc.) in the plugin's folder.
