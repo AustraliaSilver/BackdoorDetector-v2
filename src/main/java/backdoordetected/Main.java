@@ -20,10 +20,10 @@ public class Main {
     private static final String VERSION = "1.0.2";
     private static final String CONFIG_FILE_NAME = "config.properties";
 
-    private static String apiKey1;
-    private static String model1;
-    private static String apiKey2;
-    private static String model2;
+    public static String apiKey1;
+    public static String model1;
+    public static String apiKey2;
+    public static String model2;
     private static boolean enableGemini2;
 
     public static void main(String[] args) {
@@ -132,9 +132,9 @@ public class Main {
                 defaultProps.setProperty("gemini_model", "gemini-2.5-pro");
                 defaultProps.setProperty("enable_gemini_2", "true");
                 defaultProps.setProperty("gemini_api_key_2", "YOUR_SECOND_API_KEY");
-                defaultProps.setProperty("gemini_model_2", "gemini-2.5-pro");
+                defaultProps.setProperty("gemini_model_2", "gemini-2.5-flash");
                 defaultProps.setProperty("codeql_executable_path", "");
-                defaultProps.store(fos, "Backdoor Detector Configuration - Phase 1");
+                defaultProps.store(fos, "Backdoor Detector Configuration");
 
                 System.out.println("Created config.properties file");
                 System.out.println("Add your Gemini API keys to use AI features\n");
@@ -177,7 +177,7 @@ public class Main {
             props.load(fis);
             props.setProperty(key, value);
             try (FileOutputStream fos = new FileOutputStream(CONFIG_FILE_NAME)) {
-                props.store(fos, "Backdoor Detector Configuration - Phase 1");
+                props.store(fos, "Backdoor Detector Configuration");
             }
         } catch (IOException e) {
             logger.warning("Could not save property to config file: " + e.getMessage());
@@ -185,10 +185,10 @@ public class Main {
     }
 
     private static boolean isApiKeyConfigured() {
-        return apiKey2 != null &&
-                !apiKey2.isEmpty() &&
-                !apiKey2.equals("YOUR_SECOND_API_KEY") &&
-                !apiKey2.startsWith("YOUR_");
+        return apiKey1 != null &&
+                !apiKey1.isEmpty() &&
+                !apiKey1.equals("YOUR_FIRST_API_KEY") &&
+                !apiKey1.startsWith("YOUR_");
     }
 
     private static void startSequentialScan(BlockingQueue<PluginWorker.PrioritizedFile> queue,
@@ -196,10 +196,7 @@ public class Main {
         CountDownLatch latch = new CountDownLatch(1);
         ExecutorService executor = Executors.newFixedThreadPool(1);
 
-        String currentApiKey = (mode.requiresApiKey()) ? apiKey2 : null;
-        String currentModel = (mode.requiresApiKey()) ? model2 : null;
-
-        executor.submit(new PluginWorker(queue, currentApiKey, currentModel, "SCANNER", mode, latch));
+        executor.submit(new PluginWorker(queue, apiKey1, model1, apiKey2, model2, "SCANNER", mode, latch));
 
         try {
             latch.await();
@@ -221,7 +218,8 @@ public class Main {
         CountDownLatch latch = new CountDownLatch(numThreads);
 
         for (int i = 0; i < numThreads; i++) {
-            executor.submit(new PluginWorker(queue, null, null, "WORKER-" + (i + 1), mode, latch));
+            executor.submit(
+                    new PluginWorker(queue, apiKey1, model1, apiKey2, model2, "WORKER-" + (i + 1), mode, latch));
         }
 
         try {

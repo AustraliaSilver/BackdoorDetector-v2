@@ -32,12 +32,15 @@ import java.util.logging.Logger;
 import java.util.regex.Pattern;
 import java.util.regex.Matcher;
 import java.lang.ProcessBuilder;
+
 public class PluginWorker implements Runnable {
     private static final Logger logger = StandaloneLogger.getLogger();
 
     private final BlockingQueue<PrioritizedFile> queue;
-    private final String currentApiKey;
-    private final String currentModelName;
+    private final String primaryApiKey;
+    private final String primaryModelName;
+    private final String secondaryApiKey;
+    private final String secondaryModelName;
     private final String workerName;
     private final ScanMode scanMode;
     private final CountDownLatch latch;
@@ -50,18 +53,20 @@ public class PluginWorker implements Runnable {
     private final SymbolicAnalyzer symbolicAnalyzer = new SymbolicAnalyzer();
 
     private final DecompilerManager decompilerManager = new DecompilerManager();
-    private static final int MAX_PROMPT_LENGTH = 1_048_576;
+    private static final int MAX_PROMPT_LENGTH = 100_000;
     private static final long QUEUE_POLL_TIMEOUT_SECONDS = 5;
 
-    public PluginWorker(BlockingQueue<PrioritizedFile> queue, String apiKey, String modelName,
-                        String workerName, ScanMode mode, CountDownLatch latch) {
+    public PluginWorker(BlockingQueue<PrioritizedFile> queue, String apiKey1, String model1, String apiKey2,
+            String model2,
+            String workerName, ScanMode mode, CountDownLatch latch) {
         this.queue = queue;
-        this.currentApiKey = apiKey;
-        this.currentModelName = modelName;
+        this.primaryApiKey = apiKey1;
+        this.primaryModelName = model1;
+        this.secondaryApiKey = apiKey2;
+        this.secondaryModelName = model2;
         this.workerName = workerName;
         this.scanMode = mode;
         this.latch = latch;
-
     }
 
     @Override
@@ -96,11 +101,13 @@ public class PluginWorker implements Runnable {
                         case AI_MODERN, AI, AI_BACKDOOR_FOCUS -> processSequentialAi(plugin.toPath(), tempBaseDir);
                         case MODERN -> processModern(plugin.toPath(), tempBaseDir);
                         case DEPENDENCY -> processDependency(plugin.toPath());
-                        case SYMBOLIC -> logger.warning("[" + this.workerName + "] SYMBOLIC mode is now integrated into DATA_FLOW. Please use DATA_FLOW mode instead.");
+                        case SYMBOLIC -> logger.warning("[" + this.workerName
+                                + "] SYMBOLIC mode is now integrated into DATA_FLOW. Please use DATA_FLOW mode instead.");
                         default -> logger.warning("[" + this.workerName + "] Unknown scan mode: " + scanMode);
                     }
                 } catch (Exception e) {
-                    logger.severe("[" + this.workerName + "] Error processing " + plugin.getName() + ": " + e.getMessage());
+                    logger.severe(
+                            "[" + this.workerName + "] Error processing " + plugin.getName() + ": " + e.getMessage());
                     e.printStackTrace();
                 }
             }
@@ -108,7 +115,8 @@ public class PluginWorker implements Runnable {
             logger.severe("[" + this.workerName + "] Fatal IO error: " + e.getMessage());
             e.printStackTrace();
         } finally {
-            if (latch != null) latch.countDown();
+            if (latch != null)
+                latch.countDown();
             logger.info("[" + this.workerName + "] Worker FINISHED");
         }
     }
@@ -120,10 +128,13 @@ public class PluginWorker implements Runnable {
             logger.severe(" DEPENDENCY error: " + e.getMessage());
         }
     }
+
     private void processSymbolic(Path pluginPath) {
-        logger.warning("SYMBOLIC mode is deprecated and integrated into DATA_FLOW. Running data flow analysis instead.");
+        logger.warning(
+                "SYMBOLIC mode is deprecated and integrated into DATA_FLOW. Running data flow analysis instead.");
         processDataFlow(pluginPath, Paths.get("temp"));
     }
+
     private void processModern(Path pluginFile, Path tempBaseDir) {
         Path tmpDir = null;
         try {
@@ -146,6 +157,7 @@ public class PluginWorker implements Runnable {
             FileUtils.deleteDirectory(tmpDir);
         }
     }
+
     private void processSequentialAi(Path pluginPath, Path ignoredTempBaseDir) throws IOException {
         logger.info("[" + this.workerName + "] Starting AI-sequence for " + pluginPath.getFileName());
         DecompilationResult decomp = decompilePluginWithCache(pluginPath);
@@ -159,7 +171,8 @@ public class PluginWorker implements Runnable {
 
         Map<Path, Path> javaToClassMap;
         try (Stream<Path> classStream = Files.walk(workingDir)) {
-            javaToClassMap = buildJavaToClassMap(javaFiles, classStream.filter(p -> p.toString().endsWith(".class")).collect(Collectors.toList()));
+            javaToClassMap = buildJavaToClassMap(javaFiles,
+                    classStream.filter(p -> p.toString().endsWith(".class")).collect(Collectors.toList()));
         }
 
         Map<Path, List<String>> eventFindings;
@@ -188,7 +201,7 @@ public class PluginWorker implements Runnable {
         if (!bcFindings.isEmpty()) {
             eventFindings.computeIfAbsent(Paths.get("BYTECODE_ANALYSIS"), k -> new ArrayList<>())
                     .addAll(bcFindings);
-            
+
             logger.info("Bytecode analysis found " + bcFindings.size() + " potential issues:");
             bcFindings.forEach(finding -> logger.info("  -> " + finding));
         }
@@ -202,7 +215,7 @@ public class PluginWorker implements Runnable {
             List<String> fallbackBcFindings = bytecodeAnalyzer.analyze(classesToCheck);
             if (!fallbackBcFindings.isEmpty()) {
                 eventFindings.computeIfAbsent(Paths.get("BYTECODE_FALLBACK"), k -> new ArrayList<>())
-                       .addAll(fallbackBcFindings);
+                        .addAll(fallbackBcFindings);
             }
         }
 
@@ -242,13 +255,16 @@ public class PluginWorker implements Runnable {
         logger.info("Analyzing plugin configuration files (e.g., config.yml)...");
         analyzePluginConfigs(workingDir, eventFindings);
         String prompt = buildUnifiedAiPrompt(sanitizedNames, fullModernResult, codeToAnalyze, directoryTree);
+
         String aiResult = sendToGemini(pluginPath.getFileName().toString(), prompt);
+
         logger.info("╔" + "═".repeat(80) + "╗");
         logger.info("║" + " ".repeat(34) + " AI ANALYSIS RESULT " + " ".repeat(28) + "║");
         logger.info("╠" + "═".repeat(80) + "╣");
         Arrays.stream(aiResult.split("\n")).forEach(line -> logger.info("║ " + line));
         logger.info("╚" + "═".repeat(80) + "╝");
     }
+
     private void processBytecode(Path pluginPath, Path tempBaseDir) {
         Path tmpDir = null;
         try {
@@ -274,7 +290,7 @@ public class PluginWorker implements Runnable {
 
     private void processSandbox(Path pluginFile, Path tempBaseDir) {
         Path tmpDir = null;
-        try { 
+        try {
             tmpDir = Files.createTempDirectory(tempBaseDir, pluginFile.getFileName().toString() + "_sandbox_");
             DecompilationResult res = decompilerManager.decompile(pluginFile, tmpDir);
             List<Path> javaFiles = res.javaFiles();
@@ -330,15 +346,19 @@ public class PluginWorker implements Runnable {
             return Integer.compare(this.depth, o.depth);
         }
     }
+
     private String formatEventFindings(Map<Path, List<String>> findings) {
-        if (findings == null || findings.isEmpty()) return "";
+        if (findings == null || findings.isEmpty())
+            return "";
         StringBuilder sb = new StringBuilder();
         for (Map.Entry<Path, List<String>> e : findings.entrySet()) {
             sb.append("File: ").append(e.getKey().getFileName()).append("\n");
-            for (String f : e.getValue()) sb.append("  • ").append(f).append("\n");
+            for (String f : e.getValue())
+                sb.append("  • ").append(f).append("\n");
         }
         return sb.toString();
     }
+
     private void analyzePluginConfigs(Path workingDir, Map<Path, List<String>> findings) {
         try (Stream<Path> files = Files.walk(workingDir)) {
             files.filter(p -> {
@@ -359,14 +379,14 @@ public class PluginWorker implements Runnable {
 
     private void analyzeYamlContent(Path yamlFile, String content, Map<Path, List<String>> findings) {
         Pattern cmdPattern = Pattern.compile("(?:command|execute|cmd):\\s*['\"]?([^'\"\\n]+)['\"]?");
-                Matcher m = cmdPattern.matcher(content);
-                while (m.find()) {
-                    String cmd = m.group(1).trim();
-                    if (cmd.toLowerCase().contains("op ") || cmd.toLowerCase().contains("execute")) {
-                        findings.computeIfAbsent(yamlFile, k -> new ArrayList<>())
-                                .add("MEDIUM: Dangerous command in " + yamlFile.getFileName() + ": " + cmd);
-                    }
-                }
+        Matcher m = cmdPattern.matcher(content);
+        while (m.find()) {
+            String cmd = m.group(1).trim();
+            if (cmd.toLowerCase().contains("op ") || cmd.toLowerCase().contains("execute")) {
+                findings.computeIfAbsent(yamlFile, k -> new ArrayList<>())
+                        .add("MEDIUM: Dangerous command in " + yamlFile.getFileName() + ": " + cmd);
+            }
+        }
 
         Pattern urlPattern = Pattern.compile("(https?://[^\\s\"']+)");
         Matcher urlMatcher = urlPattern.matcher(content);
@@ -379,6 +399,7 @@ public class PluginWorker implements Runnable {
         }
 
     }
+
     private DecompilationResult decompilePluginWithCache(Path pluginFile) throws IOException {
         Path cacheDir = Paths.get("decompile_cache");
         Files.createDirectories(cacheDir);
@@ -390,7 +411,8 @@ public class PluginWorker implements Runnable {
         }
         Path specificCache = cacheDir.resolve(pluginFile.getFileName().toString() + "_" + checksum);
 
-        boolean needsExtraction = !Files.exists(specificCache) || !Files.isDirectory(specificCache) || isDirEmpty(specificCache);
+        boolean needsExtraction = !Files.exists(specificCache) || !Files.isDirectory(specificCache)
+                || isDirEmpty(specificCache);
         if (needsExtraction) {
             logger.info("Cache is empty or non-existent, extracting files from " + pluginFile.getFileName());
             extractAllFiles(pluginFile, specificCache);
@@ -471,130 +493,147 @@ public class PluginWorker implements Runnable {
         logger.info("[DEBUG] Successfully created " + finalMap.size() + " Java-to-Class mappings.");
         return finalMap;
     }
-    private String buildUnifiedAiPrompt(List<String> suspiciousFileNames, String findings, String code, String directoryTree) {
+
+    private String buildUnifiedAiPrompt(List<String> suspiciousFileNames, String findings, String code,
+            String directoryTree) {
         String fileList = suspiciousFileNames.isEmpty() ? "N/A" : String.join(", ", suspiciousFileNames);
-        return String.format("""
-             You are a world-class Minecraft plugin security expert. Your **only mission** is to determine if this plugin contains a **hidden, malicious backdoor**. You must be extremely precise and avoid false positives.
- 
-             **CRITICAL INSTRUCTIONS:**
-             1.  **PRIMARY GOAL: FIND TRUE BACKDOORS.** A true backdoor is **deceptive and hidden**. Prioritize finding these:
-                 *   Is triggered by a **secret, non-obvious action** (e.g., a specific chat message, a hardcoded player name/UUID, joining at a specific time).
-                 *   Communicates with **suspicious, hardcoded external servers** (e.g., pastebin, discord webhooks, random IPs) to fetch commands or exfiltrate data.
-                 *   Uses **heavy obfuscation** (e.g., decoding strings from Base64/Hex/byte arrays) specifically to hide malicious keywords like `setOp`, `exec`, or `dispatchCommand`.
+        return String.format(
+                """
+                        You are a world-class Minecraft plugin security expert. Your **only mission** is to determine if this plugin contains a **hidden, malicious backdoor**. You must be extremely precise and avoid false positives.
 
-             2.  **SECONDARY GOAL: IDENTIFY CONFIGURABLE FEATURES THAT CAN BE ABUSED.** These are **NOT backdoors**, but are worth noting.
-                 *   A feature is **NOT a backdoor** if it requires a server administrator to edit a file (`.yml`, `.json`, etc.) in the plugin's folder.
-                 *   **Example:** A plugin that runs commands from `commands.yml` is a feature. It is the admin's responsibility to secure that file. Report this as a "Configuration Vulnerability", not a backdoor.
-                 *   **Example:** A plugin that grants OP status based on a value in a data file (like AuthMe's Limbo feature) is a feature. Report this as a "Configuration Vulnerability".
-                 *   **Example:** A plugin using `Runtime.exec` for a legitimate purpose like database backups (`mysqldump`) is a feature. Do not flag this unless the command arguments can be controlled by a non-admin.
+                        **CRITICAL INSTRUCTIONS:**
+                        1.  **PRIMARY GOAL: FIND TRUE BACKDOORS.** A true backdoor is **deceptive and hidden**. Prioritize finding these:
+                            *   Is triggered by a **secret, non-obvious action** (e.g., a specific chat message, a hardcoded player name/UUID, joining at a specific time).
+                            *   Communicates with **suspicious, hardcoded external servers** (e.g., pastebin, discord webhooks, random IPs) to fetch commands or exfiltrate data.
+                            *   Uses **heavy obfuscation** (e.g., decoding strings from Base64/Hex/byte arrays) specifically to hide malicious keywords like `setOp`, `exec`, or `dispatchCommand`.
 
-             3.  **IGNORE LIBRARY FINDINGS:** The `INITIAL FINDINGS` may contain suspicious calls (like reflection or unreachable code) from bundled libraries (e.g., `io.netty`, `com.zaxxer.hikari`, `org.mariadb`, `com.mysql`, `javax.mail`). These are almost always **FALSE POSITIVES**. Ignore them unless there is direct evidence they are being used maliciously by the plugin's own code.
- 
-             ### SOURCE CODE & CONTEXT
-             %s
-             Directory Tree: %s
-             SUSPICIOUS FILES: %s
-             INITIAL FINDINGS:
-             %s
- 
-             ### YOUR TASK & RESPONSE FORMAT
-             Based on the criteria above, analyze the plugin.
-             **Strictly follow this format.**
+                        2.  **SECONDARY GOAL: IDENTIFY CONFIGURABLE FEATURES THAT CAN BE ABUSED.** These are **NOT backdoors**, but are worth noting.
+                            *   A feature is **NOT a backdoor** if it requires a server administrator to edit a file (`.yml`, `.json`, etc.) in the plugin's folder.
+                            *   **Example:** A plugin that runs commands from `commands.yml` is a feature. It is the admin's responsibility to secure that file. Report this as a "Configuration Vulnerability", not a backdoor.
+                            *   **Example:** A plugin that grants OP status based on a value in a data file (like AuthMe's Limbo feature) is a feature. Report this as a "Configuration Vulnerability".
+                            *   **Example:** A plugin using `Runtime.exec` for a legitimate purpose like database backups (`mysqldump`) is a feature. Do not flag this unless the command arguments can be controlled by a non-admin.
 
-             **Malicious:** [YES/NO] (Only YES if you find a **true backdoor** as defined in rule #1)
-             **Confidence:** [0-100%%]
-             **Severity:** [CRITICAL / HIGH / MEDIUM / LOW / NONE]
-             **Vulnerability Type:** [Hardcoded Backdoor / Command Injection / Remote Code Execution / Malicious Download / Obfuscation / Data Stealing / Configuration Vulnerability / False Positive]
+                        3.  **IGNORE LIBRARY FINDINGS:** The `INITIAL FINDINGS` may contain suspicious calls (like reflection or unreachable code) from bundled libraries (e.g., `io.netty`, `com.zaxxer.hikari`, `org.mariadb`, `com.mysql`, `javax.mail`). These are almost always **FALSE POSITIVES**. Ignore them unless there is direct evidence they are being used maliciously by the plugin's own code.
 
-             ### BRIEF REASONING
-             Provide a concise explanation. If you found a true backdoor, explain it first. If you only found configurable features that can be abused (rule #2), explain that clearly and state that it's not a true backdoor but a configuration risk.
-             """, code, directoryTree, fileList, findings);
-     }
+                        ### SOURCE CODE & CONTEXT
+                        %s
+                        Directory Tree: %s
+                        SUSPICIOUS FILES: %s
+                        INITIAL FINDINGS:
+                        %s
+
+                        ### YOUR TASK & RESPONSE FORMAT
+                        Based on the criteria above, analyze the plugin.
+                        **Strictly follow this format.**
+
+                        **Malicious:** [YES/NO] (Only YES if you find a **true backdoor** as defined in rule #1)
+                        **Confidence:** [0-100%%]
+                        **Severity:** [CRITICAL / HIGH / MEDIUM / LOW / NONE]
+                        **Vulnerability Type:** [Hardcoded Backdoor / Command Injection / Remote Code Execution / Malicious Download / Obfuscation / Data Stealing / Configuration Vulnerability / False Positive]
+
+                        ### BRIEF REASONING
+                        Provide a concise explanation. If you found a true backdoor, explain it first. If you only found configurable features that can be abused (rule #2), explain that clearly and state that it's not a true backdoor but a configuration risk.
+                        """,
+                code, directoryTree, fileList, findings);
+    }
 
     private String sendToGemini(String pluginName, String content) {
-        if (currentApiKey == null || currentApiKey.isEmpty() || currentApiKey.startsWith("YOUR_")) {
-            return "⚠️ AI analysis skipped: API key not configured";
+        if (primaryApiKey == null || primaryApiKey.isEmpty() || primaryApiKey.startsWith("YOUR_")) {
+            return "⚠️ AI analysis skipped: Primary API key not configured";
+        }
+        String lastErrorMessage = "";
+        for (int i = 1; i <= 2; i++) {
+            logger.info("[Attempt " + i + "/2] Trying PRIMARY model: " + primaryModelName + " for " + pluginName);
+            String result = trySendRequest(primaryModelName, primaryApiKey, content);
+            if (result != null)
+                return result;
+        }
+        logger.warning("Primary model failed 2 times. Switching to Secondary...");
+
+        if (secondaryApiKey != null && !secondaryApiKey.isEmpty() && !secondaryApiKey.startsWith("YOUR_")) {
+            for (int i = 1; i <= 2; i++) {
+                logger.info("[Attempt " + i + "/2] Trying SECONDARY model: " + secondaryModelName + " for "
+                        + pluginName);
+                String result = trySendRequest(secondaryModelName, secondaryApiKey, content);
+                if (result != null)
+                    return result;
+            }
+        } else {
+            logger.warning("Secondary API key not configured. Skipping backup attempts.");
         }
 
-        int maxRetries = 3;
-        int retryCount = 0;
-        while (retryCount < maxRetries) {
-            HttpURLConnection conn = null;
+        return "AI analysis FAILED after retries. Please check your API keys and quota.";
+    }
+
+    private String trySendRequest(String modelName, String apiKey, String content) {
+        HttpURLConnection conn = null;
+        try {
+            String urlString = "https://generativelanguage.googleapis.com/v1beta/models/"
+                    + modelName + ":generateContent?key=" + apiKey;
+
+            URL url = new URL(urlString);
+            conn = (HttpURLConnection) url.openConnection();
+            conn.setRequestMethod("POST");
+            conn.setRequestProperty("Content-Type", "application/json; charset=utf-8");
+            conn.setConnectTimeout(15_000);
+            conn.setReadTimeout(60_000);
+            conn.setDoOutput(true);
+
+            String safeContent = escapeJson(content);
+            String json = "{\"contents\": [{\"parts\": [{\"text\": \"" + safeContent + "\"}]}]}";
+
+            try (OutputStream os = conn.getOutputStream()) {
+                os.write(json.getBytes(StandardCharsets.UTF_8));
+            }
+
+            int code = conn.getResponseCode();
+            InputStream is = (code >= 200 && code < 300) ? conn.getInputStream() : conn.getErrorStream();
+            String responseStr = "";
+            if (is != null) {
+                try (BufferedReader br = new BufferedReader(
+                        new InputStreamReader(is, StandardCharsets.UTF_8))) {
+                    responseStr = br.lines().collect(Collectors.joining("\n"));
+                }
+            }
+
+            if (code == HttpURLConnection.HTTP_OK) {
+                JSONObject jr = new JSONObject(responseStr);
+                if (!jr.has("candidates") || jr.getJSONArray("candidates").isEmpty()) {
+                    logger.warning(modelName + ": Blocked or no candidates");
+                    return null;
+                }
+                return jr.getJSONArray("candidates").getJSONObject(0)
+                        .getJSONObject("content").getJSONArray("parts")
+                        .getJSONObject(0).getString("text");
+
+            } else if (code == 429) {
+                logger.warning("Rate limit (429) on " + modelName);
+                Thread.sleep(5000);
+                return null;
+            } else if (code == 503) {
+                logger.warning("Service unavailable (503) on " + modelName);
+                Thread.sleep(5000);
+                return null;
+            } else {
+                logger.warning("Error on " + modelName + " (HTTP " + code + "): " + responseStr);
+                return null;
+            }
+        } catch (Exception e) {
+            logger.warning("Connection error with " + modelName + ": " + e.getMessage());
             try {
-                String urlString = "https://generativelanguage.googleapis.com/v1beta/models/"
-                        + currentModelName + ":generateContent?key=" + currentApiKey;
-                URL url = new URL(urlString);
-                conn = (HttpURLConnection) url.openConnection();
-                conn.setRequestMethod("POST");
-                conn.setRequestProperty("Content-Type", "application/json; charset=utf-8");
-                conn.setConnectTimeout(15_000);
-                conn.setReadTimeout(60_000);
-                conn.setDoOutput(true);
-
-                String safeContent = escapeJson(content);
-                String json = "{\"contents\": [{\"parts\": [{\"text\": \"" + safeContent + "\"}]}]}";
-
-                try (OutputStream os = conn.getOutputStream()) {
-                    os.write(json.getBytes(StandardCharsets.UTF_8));
-                }
-
-                int code = conn.getResponseCode();
-                InputStream is = (code >= 200 && code < 300) ? conn.getInputStream() : conn.getErrorStream();
-                String responseStr = "";
-                if (is != null) {
-                    try (BufferedReader br = new BufferedReader(new InputStreamReader(is, StandardCharsets.UTF_8))) {
-                        responseStr = br.lines().collect(Collectors.joining());
-                    }
-                }
-
-                if (code == HttpURLConnection.HTTP_OK) {
-                    JSONObject jr = new JSONObject(responseStr);
-                    if (!jr.has("candidates") || jr.getJSONArray("candidates").isEmpty()) {
-                        String blockReason = jr.has("promptFeedback") ? jr.getJSONObject("promptFeedback").optString("blockReason", "Unknown") : "No candidates found";
-                        return "AI analysis failed: Prompt was blocked or returned no candidates. Reason: " + blockReason;
-                    }
-                    JSONObject candidate = jr.getJSONArray("candidates").getJSONObject(0);
-                    if (!candidate.has("content")) {
-                        return "AI analysis failed: Candidate is missing 'content'. Finish reason: " + candidate.optString("finishReason", "Unknown");
-                    }
-                    JSONObject contentObj = candidate.getJSONObject("content");
-                    if (!contentObj.has("parts") || contentObj.getJSONArray("parts").isEmpty()) {
-                        return "AI analysis failed: Content is missing 'parts'. This might indicate a blocked prompt or an empty response.";
-                    }
-                    return contentObj.getJSONArray("parts").getJSONObject(0).getString("text");
-                } else if (code == 429) {
-                    logger.warning("Rate limited. Retrying... (" + (retryCount + 1) + "/" + maxRetries + ")");
-                    Thread.sleep(5000L * (retryCount + 1));
-                    retryCount++;
-                } else if (code == 503) {
-                    logger.warning("AI service unavailable (503). Retrying... (" + (retryCount + 1) + "/" + maxRetries + ")");
-                    Thread.sleep(10000L * (retryCount + 1));
-                    retryCount++;
-                } else {
-                    return "AI failed (HTTP " + code + "): " + responseStr;
-                }
-            } catch (IOException e) {
-                logger.warning("AI connection error: " + e.getMessage() + ". Retrying...");
-                retryCount++;
-                try {
-                    Thread.sleep(3000L * retryCount);
-                } catch (InterruptedException ie) {
-                    Thread.currentThread().interrupt();
-                    return "AI analysis interrupted";
-                }
-            } catch (InterruptedException e) {
-                Thread.currentThread().interrupt();
-                return "AI analysis interrupted during backoff";
+                Thread.sleep(2000);
+            } catch (InterruptedException ignored) {
             }
-            finally {
-                if (conn != null) conn.disconnect();
-            }
+            return null;
+        } finally {
+            if (conn != null)
+                conn.disconnect();
         }
-        return "AI analysis failed after " + maxRetries + " retries";
     }
 
     private String escapeJson(String text) {
-        if (text == null) return "";
+        if (text == null)
+            return "";
         return text.replace("\\", "\\\\")
                 .replace("\"", "\\\"")
                 .replace("\n", "\\n")
@@ -603,9 +642,10 @@ public class PluginWorker implements Runnable {
     }
 
     private String sanitizeForPrompt(String input) {
-        if (input == null) return "";
+        if (input == null)
+            return "";
         return input.replaceAll("[^a-zA-Z0-9._-]", "_")
-                    .substring(0, Math.min(input.length(), 100));
+                .substring(0, Math.min(input.length(), 100));
     }
 
     private String calculateFileChecksum(Path filePath) throws IOException, NoSuchAlgorithmException {
@@ -619,7 +659,8 @@ public class PluginWorker implements Runnable {
         }
         byte[] h = digest.digest();
         StringBuilder sb = new StringBuilder();
-        for (byte b : h) sb.append(String.format("%02x", b));
+        for (byte b : h)
+            sb.append(String.format("%02x", b));
         return sb.toString();
     }
 
@@ -627,6 +668,20 @@ public class PluginWorker implements Runnable {
         StringBuilder sb = new StringBuilder();
         for (Path p : javaFiles) {
             String content = Files.readString(p, StandardCharsets.UTF_8);
+            int originalLength = content.length();
+
+            content = stripBytecodeComments(content);
+
+            int newLength = content.length();
+            if (originalLength > newLength) {
+                logger.info(
+                        "Stripped " + (originalLength - newLength) + " characters (bytecode) from " + p.getFileName());
+            }
+            int maxFileLen = maxLen / 2;
+            if (content.length() > maxFileLen) {
+                content = content.substring(0, maxFileLen) + "\n... [File truncated due to excessive size] ...";
+            }
+
             String header = "=== File: " + p.getFileName() + " ===\n```java\n";
             String footer = "\n```\n\n";
             int projectedLength = sb.length() + header.length() + content.length() + footer.length();
@@ -643,6 +698,34 @@ public class PluginWorker implements Runnable {
                 break;
             }
             sb.append(header).append(content).append(footer);
+        }
+        return sb.toString();
+    }
+
+    private String stripBytecodeComments(String content) {
+        if (content == null)
+            return "";
+        StringBuilder sb = new StringBuilder();
+        String[] lines = content.split("\n");
+        boolean inBytecodeBlock = false;
+
+        for (String line : lines) {
+            String trimmed = line.trim();
+            if (trimmed.startsWith("// Bytecode:") || trimmed.startsWith("// $VF:")) {
+                inBytecodeBlock = true;
+                sb.append("// [Bytecode block stripped to save tokens]\n");
+                continue;
+            }
+
+            if (inBytecodeBlock) {
+                if (trimmed.startsWith("//") || trimmed.isEmpty()) {
+                    continue;
+                } else {
+                    inBytecodeBlock = false;
+                }
+            }
+
+            sb.append(line).append("\n");
         }
         return sb.toString();
     }
@@ -671,5 +754,6 @@ public class PluginWorker implements Runnable {
         return sb.toString();
     }
 
-    public record DecompilationResult(List<Path> javaFiles, Map<Path, Path> javaToClassMap, Path workingDirectory) {}
+    public record DecompilationResult(List<Path> javaFiles, Map<Path, Path> javaToClassMap, Path workingDirectory) {
+    }
 }
