@@ -5,6 +5,8 @@ import java.nio.file.Paths;
 import java.util.Collections;
 import java.util.List;
 import java.util.Map;
+import backdoordetected.analyzers.DataFlowAnalyzer;
+import backdoordetected.models.AnalysisResult;
 
 public class RunAnalysis {
     public static void main(String[] args) {

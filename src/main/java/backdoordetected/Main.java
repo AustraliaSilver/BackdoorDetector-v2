@@ -4,6 +4,7 @@ import java.io.File;
 import java.io.FileInputStream;
 import java.io.FileOutputStream;
 import java.io.IOException;
+import java.io.InputStream;
 import java.util.Properties;
 import java.util.concurrent.BlockingQueue;
 import java.util.concurrent.CountDownLatch;
@@ -14,6 +15,13 @@ import java.util.logging.ConsoleHandler;
 import java.util.logging.Level;
 import java.util.logging.Logger;
 import java.util.logging.SimpleFormatter;
+import backdoordetected.exceptions.AIAnalysisException;
+import backdoordetected.exceptions.AnalysisException;
+import backdoordetected.exceptions.DeobfuscationException;
+import backdoordetected.models.PrioritizedFile;
+import backdoordetected.services.*;
+import backdoordetected.utils.ScanMode;
+import backdoordetected.utils.StandaloneLogger;
 
 public class Main {
     private static final Logger logger = Logger.getLogger(Main.class.getName());
@@ -77,7 +85,7 @@ public class Main {
 
     private static void printBanner() {
         System.out.println("\n╔═══════════════════════════════════════════════════════╗");
-        System.out.println("║   Minecraft Plugin Backdoor Detector " + VERSION + "  ║");
+        System.out.println("║   Minecraft Plugin Backdoor Detector " + VERSION + " ║");
         System.out.println("║           Advanced Security Analysis Tool             ║");
         System.out.println("╚═══════════════════════════════════════════════════════╝\n");
     }
@@ -105,8 +113,8 @@ public class Main {
     }
 
     private static void executeScan(File pluginFile, ScanMode mode) {
-        BlockingQueue<PluginWorker.PrioritizedFile> queue = new LinkedBlockingQueue<>();
-        queue.offer(new PluginWorker.PrioritizedFile(pluginFile, 0));
+        BlockingQueue<PrioritizedFile> queue = new LinkedBlockingQueue<>();
+        queue.offer(new PrioritizedFile(pluginFile, 0));
 
         if (mode == ScanMode.AI_MODERN || mode == ScanMode.AI || mode == ScanMode.AI_BACKDOOR_FOCUS) {
             startSequentialScan(queue, mode, pluginFile.getName());
@@ -191,12 +199,30 @@ public class Main {
                 !apiKey1.startsWith("YOUR_");
     }
 
-    private static void startSequentialScan(BlockingQueue<PluginWorker.PrioritizedFile> queue,
+    private static void startSequentialScan(BlockingQueue<PrioritizedFile> queue,
             ScanMode mode, String pluginName) {
         CountDownLatch latch = new CountDownLatch(1);
         ExecutorService executor = Executors.newFixedThreadPool(1);
 
-        executor.submit(new PluginWorker(queue, apiKey1, model1, apiKey2, model2, "SCANNER", mode, latch));
+        if (mode == ScanMode.AI_MODERN || mode == ScanMode.AI || mode == ScanMode.AI_BACKDOOR_FOCUS) {
+            backdoordetected.services.DeobfuscationService deobfuscator = new backdoordetected.services.DeobfuscationService();
+            backdoordetected.services.AnalysisCoordinator analyzer = new backdoordetected.services.AnalysisCoordinator();
+            backdoordetected.services.AIAnalysisService aiService = new backdoordetected.services.AIAnalysisService(
+                    apiKey1, model1, apiKey2, model2);
+            backdoordetected.services.ResultFormatter formatter = new backdoordetected.services.ResultFormatter();
+            backdoordetected.services.PluginOrchestrator orchestrator = new backdoordetected.services.PluginOrchestrator(
+                    deobfuscator, analyzer, aiService, formatter);
+
+            executor.submit(new backdoordetected.PluginWorkerNew(queue, orchestrator, "SCANNER", mode, latch));
+        } else {
+            backdoordetected.services.DeobfuscationService deobfuscator = new backdoordetected.services.DeobfuscationService();
+            backdoordetected.services.AnalysisCoordinator analyzer = new backdoordetected.services.AnalysisCoordinator();
+            backdoordetected.services.ResultFormatter formatter = new backdoordetected.services.ResultFormatter();
+            backdoordetected.services.PluginOrchestrator orchestrator = new backdoordetected.services.PluginOrchestrator(
+                    deobfuscator, analyzer, null, formatter);
+
+            executor.submit(new PluginWorkerNew(queue, orchestrator, "SCANNER", mode, latch));
+        }
 
         try {
             latch.await();
@@ -209,7 +235,7 @@ public class Main {
         }
     }
 
-    private static void startParallelScan(BlockingQueue<PluginWorker.PrioritizedFile> queue,
+    private static void startParallelScan(BlockingQueue<PrioritizedFile> queue,
             ScanMode mode, String pluginName) {
         int numThreads = Math.max(1, Runtime.getRuntime().availableProcessors() / 2);
         logger.info("Starting parallel scan with " + numThreads + " worker threads.");
@@ -217,9 +243,31 @@ public class Main {
         ExecutorService executor = Executors.newFixedThreadPool(numThreads);
         CountDownLatch latch = new CountDownLatch(numThreads);
 
-        for (int i = 0; i < numThreads; i++) {
-            executor.submit(
-                    new PluginWorker(queue, apiKey1, model1, apiKey2, model2, "WORKER-" + (i + 1), mode, latch));
+        if (mode == ScanMode.AI_MODERN || mode == ScanMode.AI || mode == ScanMode.AI_BACKDOOR_FOCUS) {
+            backdoordetected.services.DeobfuscationService deobfuscator = new backdoordetected.services.DeobfuscationService();
+            backdoordetected.services.AnalysisCoordinator analyzer = new backdoordetected.services.AnalysisCoordinator();
+            backdoordetected.services.AIAnalysisService aiService = new backdoordetected.services.AIAnalysisService(
+                    apiKey1, model1, apiKey2, model2);
+            backdoordetected.services.ResultFormatter formatter = new backdoordetected.services.ResultFormatter();
+            backdoordetected.services.PluginOrchestrator orchestrator = new backdoordetected.services.PluginOrchestrator(
+                    deobfuscator, analyzer, aiService, formatter);
+
+            for (int i = 0; i < numThreads; i++) {
+                executor.submit(
+                        new backdoordetected.PluginWorkerNew(queue, orchestrator, "WORKER-" + (i + 1), mode, latch));
+            }
+        } else {
+            backdoordetected.services.DeobfuscationService deobfuscator = new backdoordetected.services.DeobfuscationService();
+            backdoordetected.services.AnalysisCoordinator analyzer = new backdoordetected.services.AnalysisCoordinator();
+            backdoordetected.services.AIAnalysisService aiService = null;
+            backdoordetected.services.ResultFormatter formatter = new backdoordetected.services.ResultFormatter();
+            backdoordetected.services.PluginOrchestrator orchestrator = new backdoordetected.services.PluginOrchestrator(
+                    deobfuscator, analyzer, aiService, formatter);
+
+            for (int i = 0; i < numThreads; i++) {
+                executor.submit(
+                        new PluginWorkerNew(queue, orchestrator, "WORKER-" + (i + 1), mode, latch));
+            }
         }
 
         try {
