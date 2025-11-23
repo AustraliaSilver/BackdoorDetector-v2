@@ -11,7 +11,6 @@ BackdoorDetector is a professional tool designed to analyze the source code of M
 
 🧠 2. In‑Depth Code Analysis
 - Fully decompiles plugins using VineFlower -> Faster.
-- Proactively decompile using Krakatau when errors occur.
 
 🛡️ 3. Multi‑Layer Static Analysis (Multi‑layer SAST)
 Covers multiple levels of inspection:
