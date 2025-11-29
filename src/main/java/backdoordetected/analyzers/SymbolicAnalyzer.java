@@ -38,7 +38,7 @@ public class SymbolicAnalyzer {
     }
 
     public Z3Result analyzeWithCFG(Path jarPath, SuspiciousMethod suspiciousMethod) {
-        logger.info("🔬 Z3 Symbolic Analysis: " + suspiciousMethod.className() + "." + suspiciousMethod.methodName());
+        logger.info("Z3 Symbolic Analysis: " + suspiciousMethod.className() + "." + suspiciousMethod.methodName());
 
         try (Context ctx = new Context()) {
 
@@ -135,7 +135,7 @@ public class SymbolicAnalyzer {
             String stmtStr = stmt.toString();
             if (stmtStr.contains(suspiciousMethod.dangerousSink())) {
                 foundDangerousSink = true;
-                logger.info("✓ Found dangerous sink: " + stmtStr);
+                logger.info("Found dangerous sink: " + stmtStr);
             }
         }
 
@@ -147,7 +147,7 @@ public class SymbolicAnalyzer {
         Solver solver = ctx.mkSolver();
         solver.add(pathCondition);
 
-        logger.info("🔍 Querying Z3 solver...");
+        logger.info("Querying Z3 solver...");
         Status status = solver.check();
 
         if (status == Status.SATISFIABLE) {
@@ -168,7 +168,7 @@ public class SymbolicAnalyzer {
             }
 
             String explanation = String.format(
-                    "🚨 BACKDOOR CONFIRMED (Z3 VERIFIED): User input CAN reach %s in %s.%s",
+                    "BACKDOOR CONFIRMED (Z3 VERIFIED): User input CAN reach %s in %s.%s",
                     suspiciousMethod.dangerousSink(),
                     suspiciousMethod.className(),
                     suspiciousMethod.methodName());
@@ -190,7 +190,7 @@ public class SymbolicAnalyzer {
     }
 
     public void analyzeMethod(Path jarPath, String className, String methodSignature, BoolExpr backdoorCondition) {
-        logger.info("🔬 Starting symbolic analysis for: " + className + "." + methodSignature);
+        logger.info("Starting symbolic analysis for: " + className + "." + methodSignature);
 
         try (Context ctx = new Context()) {
             JavaClassPathAnalysisInputLocation inputLocation = new JavaClassPathAnalysisInputLocation(

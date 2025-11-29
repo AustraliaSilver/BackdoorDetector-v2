@@ -3,6 +3,8 @@ package backdoordetected.services;
 import backdoordetected.analyzers.*;
 import backdoordetected.decompiler.DecompilerManager;
 import backdoordetected.detection.LMXBackdoorDetector;
+import backdoordetected.detection.SootTaintAnalyzer;
+import backdoordetected.models.SootAnalysisResult;
 import backdoordetected.exceptions.AnalysisException;
 import backdoordetected.models.ComprehensiveAnalysisResult;
 import backdoordetected.models.DecompilationResult;
@@ -29,6 +31,7 @@ public class AnalysisCoordinator {
     private final EventTriggerAnalyzer eventTriggerAnalyzer = new EventTriggerAnalyzer();
     private final BytecodeAnalyzer bytecodeAnalyzer = new BytecodeAnalyzer();
     private final DataFlowAnalyzer dataFlowAnalyzer = new DataFlowAnalyzer();
+    private final SootTaintAnalyzer sootTaintAnalyzer = new SootTaintAnalyzer();
     private final DecompilerManager decompilerManager = new DecompilerManager();
     private final CacheService cacheService;
 
@@ -67,7 +70,7 @@ public class AnalysisCoordinator {
             if (javaFiles.isEmpty()) {
                 logger.warning("No Java files found after decompilation");
                 return new ComprehensiveAnalysisResult(
-                        Map.of(), List.of(), backdoorScan, false, "", List.of(), "");
+                        Map.of(), List.of(), backdoorScan, false, "", List.of(), "", SootAnalysisResult.empty());
             }
 
             Map<Path, Path> javaToClassMap;
@@ -100,29 +103,66 @@ public class AnalysisCoordinator {
             }
             Map<Path, List<String>> eventFindings;
             List<Path> failedFiles;
+            List<String> bcFindings;
 
-            if (scanMode == ScanMode.AI_MODERN) {
-                logger.info("Using DataFlowAnalyzer as pre-filter (AI_MODERN).");
-                DataFlowAnalyzer.AnalysisResult dfRes = dataFlowAnalyzer.analyze(javaFiles, workingDir);
-                eventFindings = new HashMap<>();
-                dfRes.findings().forEach((fname, fnd) -> {
-                    javaFiles.stream()
-                            .filter(p -> p.getFileName().toString().equals(fname))
-                            .findFirst()
-                            .ifPresent(p -> eventFindings.put(p, fnd));
-                });
-                failedFiles = dfRes.failedFiles();
-            } else {
-                EventTriggerAnalyzer.AnalysisResult evRes = eventTriggerAnalyzer.analyze(javaFiles);
-                eventFindings = evRes.findings();
-                failedFiles = evRes.failedFiles();
+            
+            ConfigService config = ConfigService.getInstance();
+            boolean enableParallel = config.getBooleanProperty("enable_analyzer_parallel", false);
+
+            
+            
+            int availableCores = Runtime.getRuntime().availableProcessors();
+            if (enableParallel && availableCores <= 2) {
+                logger.warning("Analyzer-level parallelization disabled: CPU has only " + availableCores +
+                        " core(s). Parallel execution requires at least 3 cores for performance benefit.");
+                logger.warning("Falling back to sequential mode to avoid context switching overhead.");
+                enableParallel = false;
             }
 
-            logger.info("Running bytecode analysis...");
-            List<Path> allClassFiles = new ArrayList<>(javaToClassMap.values());
-            logger.info("Analyzing " + allClassFiles.size() + " class files...");
-            List<String> bcFindings = bytecodeAnalyzer.analyze(allClassFiles);
-            logger.info("Bytecode analysis complete. Findings: " + bcFindings.size());
+            if (enableParallel) {
+                logger.info("Analyzer-level parallelization ENABLED (CPU cores: " + availableCores + ")");
+                int numThreads = config.getIntProperty("analyzer_parallel_threads", 3);
+
+                ParallelAnalysisCoordinator parallelCoordinator = new ParallelAnalysisCoordinator(numThreads);
+                try {
+                    ParallelAnalysisCoordinator.ParallelAnalysisResult parallelResult = parallelCoordinator
+                            .analyzeParallel(
+                                    javaFiles,
+                                    new ArrayList<>(javaToClassMap.values()),
+                                    workingDir,
+                                    scanMode == ScanMode.AI_MODERN);
+
+                    eventFindings = new HashMap<>(parallelResult.getEventFindings());
+                    failedFiles = parallelResult.getFailedFiles();
+                    bcFindings = parallelResult.getBytecodeFindings();
+                } finally {
+                    parallelCoordinator.shutdown();
+                }
+            } else {
+                
+                if (scanMode == ScanMode.AI_MODERN) {
+                    logger.info("Using DataFlowAnalyzer as pre-filter (AI_MODERN).");
+                    DataFlowAnalyzer.AnalysisResult dfRes = dataFlowAnalyzer.analyze(javaFiles, workingDir);
+                    eventFindings = new HashMap<>();
+                    dfRes.findings().forEach((fname, fnd) -> {
+                        javaFiles.stream()
+                                .filter(p -> p.getFileName().toString().equals(fname))
+                                .findFirst()
+                                .ifPresent(p -> eventFindings.put(p, fnd));
+                    });
+                    failedFiles = dfRes.failedFiles();
+                } else {
+                    EventTriggerAnalyzer.AnalysisResult evRes = eventTriggerAnalyzer.analyze(javaFiles);
+                    eventFindings = evRes.findings();
+                    failedFiles = evRes.failedFiles();
+                }
+
+                logger.info("Running bytecode analysis...");
+                List<Path> allClassFiles = new ArrayList<>(javaToClassMap.values());
+                logger.info("Analyzing " + allClassFiles.size() + " class files...");
+                bcFindings = bytecodeAnalyzer.analyze(allClassFiles);
+                logger.info("Bytecode analysis complete. Findings: " + bcFindings.size());
+            }
 
             if (!bcFindings.isEmpty()) {
                 logger.info("Bytecode findings details:");
@@ -135,11 +175,7 @@ public class AnalysisCoordinator {
                 logger.info("No bytecode findings detected.");
             }
 
-            boolean lmxStringLiteralFound = findLmxStringLiteral(javaFiles, "L/M/X");
-            if (lmxStringLiteralFound) {
-                eventFindings.computeIfAbsent(Paths.get("LMX_STRING_LITERAL"), k -> new ArrayList<>())
-                        .add("CRITICAL: L.M.X backdoor pattern found as string literal in decompiled code.");
-            }
+            boolean lmxStringLiteralFound = false; 
 
             if (backdoorScan.hasAnyBackdoor()) {
                 eventFindings.computeIfAbsent(Paths.get("KNOWN_BACKDOOR_SIGNATURES"), k -> new ArrayList<>())
@@ -150,7 +186,31 @@ public class AnalysisCoordinator {
                     "LMX_STRING_LITERAL", "KNOWN_BACKDOOR_SIGNATURES");
             List<Path> suspiciousFiles = eventFindings.keySet().stream()
                     .filter(p -> !specialKeys.contains(p.getFileName().toString()))
+                    .filter(p -> !eventFindings.get(p).isEmpty())
                     .collect(Collectors.toList());
+
+            
+            logger.info("─────────────────────────────────────────────────────");
+            logger.info("Analysis Summary:");
+            logger.info("  Total findings: " + eventFindings.size() + " file/category(ies)");
+            logger.info("  Suspicious files (after filtering): " + suspiciousFiles.size());
+            if (!suspiciousFiles.isEmpty()) {
+                logger.info("  Suspicious file list:");
+                for (Path file : suspiciousFiles) {
+                    int findingCount = eventFindings.getOrDefault(file, List.of()).size();
+                    logger.info("    • " + file.getFileName() + " (" + findingCount + " finding(s))");
+                }
+            }
+            logger.info("─────────────────────────────────────────────────────");
+
+            
+            logger.info("[" + workerName + "] Running Soot taint analysis...");
+            SootAnalysisResult sootResult = sootTaintAnalyzer.analyze(pluginPath);
+            if (sootResult.hasFindings()) {
+                logger.info("[Soot] Found " + sootResult.taintFlows().size() + " taint flow(s)");
+                eventFindings.computeIfAbsent(Paths.get("SOOT_ANALYSIS"), k -> new ArrayList<>())
+                        .addAll(sootResult.findings());
+            }
 
             String directoryTree = generateDirectoryTree(workingDir);
             String combinedCode = combineJavaFilesLimited(suspiciousFiles, MAX_PROMPT_LENGTH);
@@ -164,7 +224,8 @@ public class AnalysisCoordinator {
                     lmxStringLiteralFound,
                     directoryTree,
                     suspiciousFiles,
-                    combinedCode);
+                    combinedCode,
+                    sootResult);
 
         } catch (IOException e) {
             logger.severe("[" + workerName + "] Analysis failed with IOException: " + e.getMessage());
@@ -274,17 +335,7 @@ public class AnalysisCoordinator {
         return finalMap;
     }
 
-    private boolean findLmxStringLiteral(List<Path> javaFiles, String pattern) throws IOException {
-        Pattern lmxPattern = Pattern.compile(Pattern.quote(pattern), Pattern.CASE_INSENSITIVE);
-        for (Path javaFile : javaFiles) {
-            String content = Files.readString(javaFile, StandardCharsets.UTF_8);
-            if (lmxPattern.matcher(content).find()) {
-                logger.warning("L.M.X string literal '" + pattern + "' found in " + javaFile.getFileName());
-                return true;
-            }
-        }
-        return false;
-    }
+
 
     private void analyzePluginConfigs(Path workingDir, Map<Path, List<String>> findings) {
         try (Stream<Path> files = Files.walk(workingDir)) {

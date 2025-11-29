@@ -81,6 +81,27 @@ public class DataFlowAnalyzer {
         SANITIZERS.put("Boolean.parseBoolean", "Type conversion to boolean");
         SANITIZERS.put("UUID.fromString", "UUID validation");
         SANITIZERS.put("Enum.valueOf", "Enum validation");
+
+        SANITIZERS.put("equalsIgnoreCase", "String comparison");
+        SANITIZERS.put("equals", "String comparison");
+        SANITIZERS.put("startsWith", "Prefix validation");
+        SANITIZERS.put("endsWith", "Suffix validation");
+        SANITIZERS.put("contains", "Substring/Config check");
+        SANITIZERS.put("isEmpty", "Empty check");
+        SANITIZERS.put("isBlank", "Blank check");
+        SANITIZERS.put("trim", "Whitespace removal");
+        SANITIZERS.put("toLowerCase", "Case normalization");
+        SANITIZERS.put("toUpperCase", "Case normalization");
+        SANITIZERS.put("matches", "Regex validation");
+
+        SANITIZERS.put("hasPermission", "Permission check");
+        SANITIZERS.put("isOp", "OP status check");
+        SANITIZERS.put("hasPlayedBefore", "Player validation");
+        SANITIZERS.put("isOnline", "Player online check");
+        SANITIZERS.put("isBanned", "Ban status check");
+        SANITIZERS.put("isWhitelisted", "Whitelist check");
+
+        SANITIZERS.put("isSet", "Config key validation");
         SANITIZER_PATTERNS.add(java.util.regex.Pattern.compile("replaceAll\\(\"\\[\\^[a-zA-Z0-9]+\\]\""));
         SANITIZER_PATTERNS.add(java.util.regex.Pattern.compile("matches\\(\"\\[a-zA-Z0-9\\]+\""));
     }
@@ -716,17 +737,34 @@ public class DataFlowAnalyzer {
                         boolean allSanitized = scopeTaint.stream().allMatch(TaintValue::isSanitized);
                         boolean allValidated = scopeTaint.stream().allMatch(this::isValidatedByPath);
 
-                        if (!allSanitized && !allValidated) {
-                            String finding = String.format(
-                                    "CRITICAL DATA FLOW: Dangerous method '%s' called on tainted object at line %d.",
-                                    methodName, call.getRange().map(r -> r.begin.line).orElse(-1));
-                            findings.add(finding);
+                        boolean isLegitimate = isLegitimateCommandPattern(call, scopeTaint);
+
+                        Optional<String> backdoorPattern = matchesKnownPattern(call);
+
+                        if (!allSanitized && !allValidated && !isLegitimate) {
+                            StringBuilder finding = new StringBuilder();
+
+                            if (backdoorPattern.isPresent()) {
+                                finding.append(String.format(
+                                        "BACKDOOR PATTERN DETECTED: %s at line %d\n",
+                                        backdoorPattern.get(),
+                                        call.getRange().map(r -> r.begin.line).orElse(-1)));
+                            } else {
+                                finding.append(String.format(
+                                        "CRITICAL DATA FLOW: Dangerous method '%s' called on tainted object at line %d\n",
+                                        methodName, call.getRange().map(r -> r.begin.line).orElse(-1)));
+                            }
+
+                            findings.add(finding.toString().trim());
                         } else {
                             if (allSanitized) {
                                 logger.fine("Skipping sanitized taint at dangerous sink: " + methodName);
                             }
                             if (allValidated) {
                                 logger.fine("Skipping path-validated taint at dangerous sink: " + methodName);
+                            }
+                            if (isLegitimate) {
+                                logger.fine("Skipping legitimate pattern at dangerous sink: " + methodName);
                             }
                         }
                     }
@@ -743,17 +781,48 @@ public class DataFlowAnalyzer {
                         boolean allSanitized = argTaint.stream().allMatch(TaintValue::isSanitized);
                         boolean allValidated = argTaint.stream().allMatch(this::isValidatedByPath);
 
-                        if (!allSanitized && !allValidated) {
-                            String finding = String.format(
-                                    "CRITICAL DATA FLOW: Tainted data passed to dangerous sink '%s' at line %d.",
-                                    call, call.getRange().map(r -> r.begin.line).orElse(-1));
-                            findings.add(finding);
+                        boolean isLegitimate = isLegitimateCommandPattern(call, argTaint);
+
+                        Optional<String> backdoorPattern = matchesKnownPattern(call);
+
+                        if (!allSanitized && !allValidated && !isLegitimate) {
+
+                            StringBuilder finding = new StringBuilder();
+
+                            if (backdoorPattern.isPresent()) {
+                                finding.append(String.format(
+                                        "BACKDOOR PATTERN DETECTED: %s at line %d\n",
+                                        backdoorPattern.get(),
+                                        call.getRange().map(r -> r.begin.line).orElse(-1)));
+                            } else {
+                                finding.append(String.format(
+                                        "CRITICAL DATA FLOW: Tainted data passed to dangerous sink '%s' at line %d\n",
+                                        methodName, call.getRange().map(r -> r.begin.line).orElse(-1)));
+                            }
+
+                            finding.append("  Taint Sources:\n");
+                            for (TaintValue tv : argTaint) {
+                                finding.append(String.format("    - [%s] %s (line %d)\n",
+                                        tv.getCategory(), tv.getSource(), tv.getLineNumber()));
+                            }
+
+                            if (hasPermissionCheckNearby(call)) {
+                                finding.append(
+                                        "Note: Permission check detected but not sufficient to prevent this flow\n");
+                            } else {
+                                finding.append("Warning: No permission check detected\n");
+                            }
+
+                            findings.add(finding.toString().trim());
                         } else {
                             if (allSanitized) {
                                 logger.fine("Skipping sanitized taint at dangerous sink: " + methodName);
                             }
                             if (allValidated) {
                                 logger.fine("Skipping path-validated taint at dangerous sink: " + methodName);
+                            }
+                            if (isLegitimate) {
+                                logger.fine("Skipping legitimate pattern at dangerous sink: " + methodName);
                             }
                         }
                     }
@@ -1049,6 +1118,167 @@ public class DataFlowAnalyzer {
                 return null;
             }
         }
+
+        private boolean hasPermissionCheckNearby(MethodCallExpr dangerousCall) {
+            Optional<MethodDeclaration> methodOpt = dangerousCall.findAncestor(MethodDeclaration.class);
+            if (methodOpt.isEmpty())
+                return false;
+
+            MethodDeclaration method = methodOpt.get();
+
+            List<MethodCallExpr> permissionChecks = method.findAll(MethodCallExpr.class).stream()
+                    .filter(call -> {
+                        String name = call.getNameAsString();
+                        return name.equals("hasPermission") ||
+                                name.equals("isOp") ||
+                                name.equals("hasPermissionNode") ||
+                                name.equals("checkPermission");
+                    })
+                    .collect(java.util.stream.Collectors.toList());
+
+            if (permissionChecks.isEmpty())
+                return false;
+
+            int dangerousLine = dangerousCall.getRange().map(r -> r.begin.line).orElse(-1);
+
+            for (MethodCallExpr permCheck : permissionChecks) {
+                int permLine = permCheck.getRange().map(r -> r.begin.line).orElse(-1);
+                if (permLine > 0 && permLine < dangerousLine) {
+
+                    Optional<com.github.javaparser.ast.stmt.IfStmt> ifStmt = permCheck
+                            .findAncestor(com.github.javaparser.ast.stmt.IfStmt.class);
+
+                    if (ifStmt.isPresent()) {
+
+                        if (ifStmt.get().getThenStmt().containsWithinRange(dangerousCall)) {
+                            logger.info("Permission check detected guarding dangerous call at line " + dangerousLine);
+                            return true;
+                        }
+                    }
+                }
+            }
+
+            return false;
+        }
+
+        private boolean isLegitimateCommandPattern(MethodCallExpr call, Set<TaintValue> taintSources) {
+            String methodName = call.getNameAsString();
+
+            if (methodName.equals("dispatchCommand") || methodName.equals("exec")) {
+                if (hasPermissionCheckNearby(call)) {
+                    logger.fine("Legitimate pattern: Permission-guarded command");
+                    return true;
+                }
+            }
+
+            for (TaintValue tv : taintSources) {
+                TaintCategory category = tv.getCategory();
+                if (category == TaintCategory.CONFIG) {
+                    logger.fine("Legitimate pattern: Config-based command");
+                    return true;
+                }
+            }
+
+            if (call.getArguments().size() > 0) {
+                Expression arg = call.getArgument(0);
+
+                if (arg.isStringLiteralExpr()) {
+                    logger.fine("Legitimate pattern: Hardcoded command");
+                    return true;
+                }
+
+                if (arg.isBinaryExpr()) {
+                    BinaryExpr binary = arg.asBinaryExpr();
+                    if (binary.getOperator() == BinaryExpr.Operator.PLUS) {
+                        if (binary.getLeft().isStringLiteralExpr()) {
+                            String literal = binary.getLeft().asStringLiteralExpr().getValue();
+
+                            if (literal.startsWith("/") || literal.matches("^[a-z]+:.*")) {
+                                logger.fine("Legitimate pattern: Safe command prefix");
+                                return true;
+                            }
+                        }
+                    }
+                }
+            }
+
+            return false;
+        }
+
+        private boolean containsBase64(Expression expr) {
+            String exprStr = expr.toString();
+            return exprStr.contains("Base64") &&
+                    (exprStr.contains("decode") || exprStr.contains("encode"));
+        }
+
+        private boolean containsObfuscation(Expression expr) {
+            String exprStr = expr.toString();
+
+            if (exprStr.contains("^") && exprStr.contains("0x")) {
+                return true;
+            }
+
+            if (exprStr.contains("byte[]") && exprStr.contains("new byte")) {
+                return true;
+            }
+
+            if (exprStr.matches(".*\\(char\\).*\\+.*")) {
+                return true;
+            }
+
+            return false;
+        }
+
+        private boolean hasObfuscatedArgument(MethodCallExpr call) {
+            return call.getArguments().stream()
+                    .anyMatch(arg -> containsBase64(arg) || containsObfuscation(arg));
+        }
+
+        private Optional<String> matchesKnownPattern(MethodCallExpr call) {
+            String methodName = call.getNameAsString();
+
+            if (methodName.equals("dispatchCommand") || methodName.equals("exec")) {
+                if (hasObfuscatedArgument(call)) {
+                    return Optional.of("Hidden Admin Command (Base64/Obfuscated)");
+                }
+            }
+
+            if (methodName.equals("forName") || methodName.equals("invoke") ||
+                    methodName.equals("newInstance")) {
+                if (hasObfuscatedArgument(call)) {
+                    return Optional.of("Reflection Execution Chain");
+                }
+            }
+
+            if (methodName.equals("exec")) {
+                Optional<MethodDeclaration> methodOpt = call.findAncestor(MethodDeclaration.class);
+                if (methodOpt.isPresent()) {
+                    MethodDeclaration method = methodOpt.get();
+                    boolean hasNetworkOps = method.findAll(MethodCallExpr.class).stream()
+                            .anyMatch(c -> {
+                                String name = c.getNameAsString();
+                                return name.contains("Socket") || name.contains("URL") ||
+                                        name.contains("HttpURLConnection");
+                            });
+
+                    if (hasNetworkOps) {
+                        return Optional.of("Network Backdoor");
+                    }
+                }
+            }
+
+            return Optional.empty();
+        }
+    }
+
+    private enum TaintCategory {
+        PLAYER_INPUT,
+        DESERIALIZATION,
+        NETWORK_INPUT,
+        FILE_INPUT,
+        CONFIG,
+        DATABASE,
+        UNKNOWN
     }
 
     private static class TaintValue {
@@ -1058,6 +1288,7 @@ public class DataFlowAnalyzer {
         private final boolean sanitized;
         private final String sanitizer;
         private final PathCondition condition;
+        private final TaintCategory category;
 
         public TaintValue(String source, int lineNumber) {
             this(source, lineNumber, false, null, PathCondition.none());
@@ -1073,6 +1304,49 @@ public class DataFlowAnalyzer {
             this.sanitized = sanitized;
             this.sanitizer = sanitizer;
             this.condition = condition != null ? condition : PathCondition.none();
+            this.category = categorizeSource(source);
+        }
+
+        private static TaintCategory categorizeSource(String source) {
+            if (source == null)
+                return TaintCategory.UNKNOWN;
+
+            String lowerSource = source.toLowerCase();
+
+            if (lowerSource.contains("playercommand") || lowerSource.contains("playerchat") ||
+                    lowerSource.contains("signevent") || lowerSource.contains("playerjoin") ||
+                    lowerSource.contains("playerinteract")) {
+                return TaintCategory.PLAYER_INPUT;
+            }
+
+            if (lowerSource.contains("readobject") || lowerSource.contains("fromjson") ||
+                    lowerSource.contains("yaml.load") || lowerSource.contains("deserialize") ||
+                    lowerSource.contains("objectmapper")) {
+                return TaintCategory.DESERIALIZATION;
+            }
+
+            if (lowerSource.contains("getconfig") || lowerSource.contains("config.yml") ||
+                    lowerSource.contains("configurationsection") || lowerSource.contains("config.get")) {
+                return TaintCategory.CONFIG;
+            }
+
+            if (lowerSource.contains("socket") || lowerSource.contains("url") ||
+                    lowerSource.contains("httpurlconnection") || lowerSource.contains("inputstream") ||
+                    lowerSource.contains("network")) {
+                return TaintCategory.NETWORK_INPUT;
+            }
+
+            if (lowerSource.contains("fileinputstream") || lowerSource.contains("bufferedreader") ||
+                    lowerSource.contains("file.read") || lowerSource.contains("files.read")) {
+                return TaintCategory.FILE_INPUT;
+            }
+
+            if (lowerSource.contains("resultset") || lowerSource.contains("preparedstatement") ||
+                    lowerSource.contains("query") || lowerSource.contains("database")) {
+                return TaintCategory.DATABASE;
+            }
+
+            return TaintCategory.UNKNOWN;
         }
 
         public String getSource() {
@@ -1093,6 +1367,10 @@ public class DataFlowAnalyzer {
 
         public PathCondition getCondition() {
             return condition;
+        }
+
+        public TaintCategory getCategory() {
+            return category;
         }
 
         public TaintValue withSanitization(String sanitizerName) {

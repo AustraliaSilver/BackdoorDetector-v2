@@ -12,7 +12,8 @@ public record ComprehensiveAnalysisResult(
         boolean lmxStringLiteralFound,
         String directoryTree,
         List<Path> suspiciousFiles,
-        String combinedCode) {
+        String combinedCode,
+        SootAnalysisResult sootResult) {
     public boolean hasFindings() {
         return !eventFindings.isEmpty() || backdoorScan.hasAnyBackdoor() || lmxStringLiteralFound;
     }
@@ -23,6 +24,11 @@ public record ComprehensiveAnalysisResult(
 
     public boolean hasHighSeverityFindings() {
         if (hasKnownBackdoor()) {
+            return true;
+        }
+
+        
+        if (sootResult != null && sootResult.hasCriticalFindings()) {
             return true;
         }
 

@@ -35,18 +35,29 @@ public class PluginOrchestrator {
             Path pathToAnalyze = deobfuscationService.deobfuscate(pluginPath);
             ComprehensiveAnalysisResult analysis = analysisCoordinator.analyze(
                     pathToAnalyze, scanMode, workerName);
-            if (!analysis.hasHighSeverityFindings()) {
-                if (analysis.hasFindings()) {
-                    logger.info("Only LOW severity findings detected; skipping AI analyze.");
-                } else {
-                    logger.info("No suspicious triggers found; skipping AI analyze.");
-                }
-                return "**Malicious:** NO\n**Confidence:** 95%\n**Severity:** NONE\n**Vulnerability Type:** Clean\n\n### BRIEF REASONING\nNo high-severity suspicious patterns detected.";
+
+            
+            boolean hasSuspiciousFiles = !analysis.suspiciousFiles().isEmpty();
+
+            if (!hasSuspiciousFiles && !analysis.hasFindings()) {
+                logger.info("No suspicious files or triggers found; skipping AI analyze.");
+                return "**Malicious:** NO\n**Confidence:** 95%\n**Severity:** NONE\n**Vulnerability Type:** Clean\n\n### BRIEF REASONING\nNo suspicious patterns or files detected.";
             }
+
+            
             String aiResult = null;
-            if (scanMode == ScanMode.AI_MODERN || scanMode == ScanMode.AI || scanMode == ScanMode.AI_BACKDOOR_FOCUS) {
-                String prompt = buildPrompt(analysis);
-                aiResult = aiAnalysisService.analyze(prompt, pluginPath.getFileName().toString());
+            if (aiAnalysisService != null && (scanMode == ScanMode.AI_MODERN || scanMode == ScanMode.AI
+                    || scanMode == ScanMode.AI_BACKDOOR_FOCUS)) {
+
+                if (hasSuspiciousFiles || analysis.hasHighSeverityFindings()) {
+                    logger.info("Suspicious files detected (" + analysis.suspiciousFiles().size()
+                            + " file(s)). Sending to AI for analysis...");
+                    String prompt = buildPrompt(analysis);
+                    aiResult = aiAnalysisService.analyze(prompt, pluginPath.getFileName().toString());
+                } else {
+                    logger.info("Only LOW severity findings without suspicious files; skipping AI analyze.");
+                    return "**Malicious:** NO\n**Confidence:** 90%\n**Severity:** LOW\n**Vulnerability Type:** Minor Issues\n\n### BRIEF REASONING\nOnly low-severity patterns detected without suspicious files.";
+                }
             }
 
             String formattedResult = resultFormatter.formatResult(
@@ -74,6 +85,18 @@ public class PluginOrchestrator {
         List<String> suspiciousFileNames = analysis.suspiciousFiles().stream()
                 .map(p -> sanitizeForPrompt(p.getFileName().toString()))
                 .collect(Collectors.toList());
+
+        
+        if (!suspiciousFileNames.isEmpty()) {
+            logger.info("═══════════════════════════════════════════════════════");
+            logger.info("Sending " + suspiciousFileNames.size() + " suspicious file(s) to AI for analysis:");
+            for (String fileName : suspiciousFileNames) {
+                logger.info("  → " + fileName);
+            }
+            logger.info("═══════════════════════════════════════════════════════");
+        } else {
+            logger.info("No suspicious files to send to AI (only metadata/findings)");
+        }
 
         String findings = formatEventFindings(analysis.eventFindings());
 

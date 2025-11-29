@@ -4,326 +4,230 @@ import backdoordetected.models.BehaviorFingerprint;
 import org.objectweb.asm.*;
 import org.objectweb.asm.tree.*;
 import backdoordetected.utils.StandaloneLogger;
-import backdoordetected.models.SuspiciousMethod;
+
 import java.io.IOException;
 import java.io.InputStream;
-import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
-import java.util.regex.Matcher;
 import java.util.*;
 import java.util.logging.Logger;
+import java.util.regex.Matcher;
 import java.util.regex.Pattern;
+import java.util.stream.Collectors;
 
 public class BytecodeAnalyzer {
 
     private static final Logger logger = StandaloneLogger.getLogger();
 
     private static final Map<String, String> SUSPICIOUS_CALLS = new HashMap<>();
-    private static final Set<String> NETWORK_CALL_PATTERNS = new HashSet<>();
-    private static final Map<Pattern, String> SUSPICIOUS_STRING_PATTERNS = new LinkedHashMap<>();
-
-    private static final Set<String> IGNORED_PACKAGE_PREFIXES = Set.of();
-
     static {
         SUSPICIOUS_CALLS.put("java/lang/Runtime.exec", "CRITICAL: Executes system commands");
-        SUSPICIOUS_CALLS.put("java/lang/ProcessBuilder.start", "CRITICAL: Starts a system process");
+        SUSPICIOUS_CALLS.put("java/lang/ProcessBuilder.start", "CRITICAL: Executes system commands");
+        SUSPICIOUS_CALLS.put("java/lang/ProcessBuilder.command", "CRITICAL: Executes system commands");
+        SUSPICIOUS_CALLS.put("java/net/URL.openConnection", "HIGH: Creates network connections");
+        SUSPICIOUS_CALLS.put("java/net/Socket.<init>", "HIGH: Creates raw socket connections");
+        SUSPICIOUS_CALLS.put("org/bukkit/Bukkit.dispatchCommand", "HIGH: Dispatches a command as the console");
+        SUSPICIOUS_CALLS.put("org/bukkit/Server.dispatchCommand", "HIGH: Dispatches a command as the console");
+        SUSPICIOUS_CALLS.put("org/bukkit/entity/Player.setOp", "CRITICAL: Grants operator status to a player");
+        SUSPICIOUS_CALLS.put("org/bukkit/permissions/Permissible.addAttachment", "HIGH: Modifies permissions");
         SUSPICIOUS_CALLS.put("java/lang/reflect/Method.invoke",
                 "HIGH: Uses reflection, could be hiding malicious calls");
-        SUSPICIOUS_CALLS.put("java/net/URL.openConnection", "HIGH: Creates network connections");
-        SUSPICIOUS_CALLS.put("java/net/Socket.<init>", "HIGH: Creates a raw socket connection");
+        SUSPICIOUS_CALLS.put("java/lang/Class.forName", "HIGH: Dynamic class loading, often used for obfuscation");
         SUSPICIOUS_CALLS.put("java/lang/ClassLoader.defineClass",
-                "CRITICAL: Loads a class from bytes, potential for dynamic code execution");
-        SUSPICIOUS_CALLS.put("java/lang/System.load", "CRITICAL: Loads a native library");
-        SUSPICIOUS_CALLS.put("org/bukkit/Bukkit.dispatchCommand", "HIGH: Dispatches a command as the console");
-        SUSPICIOUS_CALLS.put("org/bukkit/Bukkit.getOfflinePlayer", "LOW: Can be used for UUID impersonation");
-        SUSPICIOUS_CALLS.put("org/bukkit/Bukkit.getWhitelistedPlayers", "LOW: Can be used to check for whitelisting");
+                "CRITICAL: Custom class loading, typical of malware loaders");
+        SUSPICIOUS_CALLS.put("org/bukkit/Bukkit.getOnlinePlayers", "LOW: Can be used for targeting players");
         SUSPICIOUS_CALLS.put("org/bukkit/Bukkit.getServer",
                 "LOW: General server access, but can be part of malicious chain");
-        SUSPICIOUS_CALLS.put("org/bukkit/Bukkit.getOnlinePlayers", "LOW: Can be used for targeting players");
-        SUSPICIOUS_CALLS.put("org/bukkit/Bukkit.broadcast", "LOW: Broadcasts messages, could be used for spam");
-        SUSPICIOUS_CALLS.put("org/bukkit/Bukkit.broadcastMessage", "LOW: Broadcasts messages, could be used for spam");
         SUSPICIOUS_CALLS.put("org/bukkit/Bukkit.getPluginManager", "LOW: Can be used to access other plugins");
         SUSPICIOUS_CALLS.put("org/bukkit/scheduler/BukkitScheduler.runTaskTimer",
                 "LOW: Schedules repeating tasks, can be used for malicious loops");
-        NETWORK_CALL_PATTERNS.add("java/net/URL");
-        NETWORK_CALL_PATTERNS.add("java/net/Socket");
-        NETWORK_CALL_PATTERNS.add("java/net/HttpURLConnection");
-        NETWORK_CALL_PATTERNS.add("org/apache/http/client/HttpClient");
-        SUSPICIOUS_STRING_PATTERNS.put(Pattern.compile("\\brce\\b", Pattern.CASE_INSENSITIVE),
-                "Contains exact word 'rce'");
-        SUSPICIOUS_STRING_PATTERNS.put(Pattern.compile("\\bkeylogger\\b", Pattern.CASE_INSENSITIVE),
-                "Contains exact word 'keylogger'");
-        SUSPICIOUS_STRING_PATTERNS.put(Pattern.compile("backdoor", Pattern.CASE_INSENSITIVE), "Contains 'backdoor'");
-        SUSPICIOUS_STRING_PATTERNS.put(Pattern.compile("pastebin\\.com", Pattern.CASE_INSENSITIVE),
-                "Contains URL 'pastebin.com'");
-        SUSPICIOUS_STRING_PATTERNS.put(Pattern.compile("https?://", Pattern.CASE_INSENSITIVE),
-                "Contains URL prefix 'http://' or 'https://'");
-        SUSPICIOUS_STRING_PATTERNS.put(Pattern.compile("discordapp\\.com/api/webhooks", Pattern.CASE_INSENSITIVE),
-                "Contains Discord webhook URL");
-        SUSPICIOUS_STRING_PATTERNS.put(Pattern.compile("new byte\\[\\]\\s*\\{([\\s,0-9\\-]*)\\}"),
-                "MEDIUM: Potential obfuscated string (byte array initialization)");
-        SUSPICIOUS_STRING_PATTERNS.put(Pattern.compile("new char\\[\\]\\s*\\{([\\s,0-9']*)\\}"),
-                "MEDIUM: Potential obfuscated string (char array initialization)");
-        SUSPICIOUS_STRING_PATTERNS.put(Pattern.compile("remoteaccess", Pattern.CASE_INSENSITIVE),
-                "Contains 'remoteaccess'");
+    }
+
+    private static final Map<String, String> SUSPICIOUS_STRING_PATTERNS = new HashMap<>();
+    static {
+        SUSPICIOUS_STRING_PATTERNS.put("(?i)curl\\s+.*", "Contains 'curl' command");
+        SUSPICIOUS_STRING_PATTERNS.put("(?i)wget\\s+.*", "Contains 'wget' command");
+        SUSPICIOUS_STRING_PATTERNS.put("(?i)rm\\s+-rf.*", "Contains destructive 'rm -rf' command");
+        SUSPICIOUS_STRING_PATTERNS.put("(?i)cmd\\.exe", "Targeting Windows command prompt");
+        SUSPICIOUS_STRING_PATTERNS.put("(?i)/bin/sh", "Targeting Unix shell");
+        SUSPICIOUS_STRING_PATTERNS.put("(?i)/bin/bash", "Targeting Bash shell");
+        SUSPICIOUS_STRING_PATTERNS.put("(?i)nc\\s+.*", "Contains 'netcat' command (often used for reverse shells)");
+        SUSPICIOUS_STRING_PATTERNS.put("(?i)eval\\(.*\\)", "Contains 'eval()' (dangerous in many languages)");
+        SUSPICIOUS_STRING_PATTERNS.put("(?i)base64_decode", "Contains 'base64_decode' (PHP-like signature)");
+        SUSPICIOUS_STRING_PATTERNS.put("(?i)http://", "Contains URL prefix 'http://' or 'https://'");
+        SUSPICIOUS_STRING_PATTERNS.put("(?i)https://", "Contains URL prefix 'http://' or 'https://'");
+        SUSPICIOUS_STRING_PATTERNS.put("(?i)\\d{1,3}\\.\\d{1,3}\\.\\d{1,3}\\.\\d{1,3}", "Contains an IP address");
     }
 
     private static final Set<String> CRYPTO_PATTERNS = Set.of(
             "javax/crypto/Cipher",
             "java/security/MessageDigest",
-            "decrypt",
-            "decipher");
+            "javax/crypto/spec/SecretKeySpec");
 
-    private static final Set<String> KNOWN_SUSPICIOUS_KEYS_HEX = Set.of(
-            "2b7e151628aed2a6abf7158809cf4f3c",
-            "603deb1015ca71be2b73aef0857d77811f352c073b6108d72d9810a30914dff4");
-    private static final Set<String> KNOWN_SUSPICIOUS_KEYS_BASE64 = Set.of(
-            "K34VFigK7aartxWICc9PPw==",
-            "YD3rEBXKe+4rc67whX13gR81LAd7YQjXLZgQowkU3/Q=");
-
-    private final CFGAnalyzer cfgAnalyzer = new CFGAnalyzer();
+    
+    private static final int MAX_INVOKE_DYNAMIC_LOGS = 5;
+    private static final int MAX_UNREACHABLE_LOGS = 5;
 
     public List<String> analyze(List<Path> classFiles) {
-        Set<String> findings = new HashSet<>();
+        logger.info("Analyzing " + classFiles.size() + " class files...");
+        List<String> findings = new ArrayList<>();
+
+        
+        Map<String, Integer> findingCounts = new HashMap<>();
+
         for (Path classFile : classFiles) {
             try (InputStream is = Files.newInputStream(classFile)) {
-                ClassReader cr = new ClassReader(is);
-                ClassNode cn = new ClassNode();
-                cr.accept(cn, ClassReader.SKIP_DEBUG | ClassReader.SKIP_FRAMES);
+                ClassReader reader = new ClassReader(is);
+                ClassNode classNode = new ClassNode();
+                reader.accept(classNode, 0);
 
-                if (isIgnoredPackage(cn.name)) {
-                    logger.fine("Skipping analysis for known library class: " + cn.name);
-                    continue;
-                }
-
-                for (MethodNode mn : cn.methods) {
-                    analyzeMethod(mn, cn.name, findings);
-                }
-                analyzeReflectionChain(cn, findings);
-
-                analyzeBehavioralFingerprint(cn, findings);
+                analyzeClass(classNode, findings, findingCounts);
 
             } catch (IOException e) {
-                logger.log(java.util.logging.Level.WARNING, "Failed to analyze class file: " + classFile.getFileName(),
-                        e);
+                logger.warning("Failed to analyze class file: " + classFile + " - " + e.getMessage());
             }
         }
-        return new ArrayList<>(findings);
+
+        
+        addSuppressedFindingsSummary(findings, findingCounts);
+
+        return findings;
     }
 
-    private boolean isIgnoredPackage(String className) {
-        return IGNORED_PACKAGE_PREFIXES.stream().anyMatch(className::startsWith);
-    }
-
-    private void analyzeMethod(MethodNode methodNode, String className, Set<String> findings) {
-        InsnList instructions = methodNode.instructions;
-        for (AbstractInsnNode insnNode : instructions) {
-            if (insnNode.getType() == AbstractInsnNode.METHOD_INSN) {
-                MethodInsnNode methodInsn = (MethodInsnNode) insnNode;
-                String fullMethodSignature = methodInsn.owner + "." + methodInsn.name;
-                if (SUSPICIOUS_CALLS.containsKey(fullMethodSignature)) {
-                    String finding = String.format(
-                            "Suspicious bytecode call to '%s' in class '%s', method '%s'. Reason: %s",
-                            fullMethodSignature.replace('/', '.'),
-                            className.replace('/', '.'),
-                            methodNode.name,
-                            SUSPICIOUS_CALLS.get(fullMethodSignature));
-                    findings.add(finding);
-                }
-                detectCryptoUsage(methodNode, className, findings);
-                analyzeInvokeDynamic(methodNode, className, findings);
-                cfgAnalyzer.analyze(methodNode, className, findings);
-            } else if (insnNode.getType() == AbstractInsnNode.LDC_INSN) {
-                LdcInsnNode ldcInsn = (LdcInsnNode) insnNode;
-                if (ldcInsn.cst instanceof String) {
-                    String stringValue = (String) ldcInsn.cst;
-                    checkForSuspiciousStrings(stringValue, "Contains suspicious string", className, methodNode.name,
-                            findings);
-                    if (KNOWN_SUSPICIOUS_KEYS_HEX.contains(stringValue.toLowerCase())) {
-                        findings.add(String.format(
-                                "CRITICAL: Hardcoded known cryptographic key (HEX) detected in class '%s', method '%s'.",
-                                className.replace('/', '.'), methodNode.name));
-                    }
-
-                    if (isBase64(stringValue)) {
-                        try {
-                            byte[] decodedBytes = Base64.getDecoder().decode(stringValue.trim());
-                            String decodedString = new String(decodedBytes, StandardCharsets.UTF_8);
-                            checkForSuspiciousStrings(decodedString, "Contains suspicious DECODED Base64 string",
-                                    className, methodNode.name, findings);
-
-                            if (KNOWN_SUSPICIOUS_KEYS_BASE64.contains(stringValue)) {
-                                findings.add(String.format(
-                                        "CRITICAL: Hardcoded known cryptographic key (Base64) detected in class '%s', method '%s'.",
-                                        className.replace('/', '.'), methodNode.name));
-                            }
-                            String decodedHex = bytesToHex(decodedBytes);
-                            if (KNOWN_SUSPICIOUS_KEYS_HEX.contains(decodedHex)) {
-                                findings.add(String.format(
-                                        "CRITICAL: Hardcoded known cryptographic key (decoded Base64 to HEX) detected in class '%s', method '%s'.",
-                                        className.replace('/', '.'), methodNode.name));
-                            }
-                        } catch (IllegalArgumentException e) {
-                        }
-                    }
-                }
-            }
-        }
-    }
-
-    private void analyzeInvokeDynamic(MethodNode mn, String className, Set<String> findings) {
-        for (AbstractInsnNode insn : mn.instructions) {
-            if (insn.getType() == AbstractInsnNode.INVOKE_DYNAMIC_INSN) {
-                InvokeDynamicInsnNode indy = (InvokeDynamicInsnNode) insn;
-                findings.add(String.format(
-                        "MEDIUM: InvokeDynamic detected in %s.%s - possible obfuscation or lambda",
-                        className.replace('/', '.'), mn.name));
-            }
-        }
-    }
-
-    private void detectCryptoUsage(MethodNode mn, String className, Set<String> findings) {
-        for (AbstractInsnNode insn : mn.instructions) {
-            if (insn.getType() == AbstractInsnNode.METHOD_INSN) {
-                MethodInsnNode methodInsn = (MethodInsnNode) insn;
-                if (CRYPTO_PATTERNS.contains(methodInsn.owner)) {
-                    String finding = String.format(
-                            "INFO: Cryptographic API usage detected in class '%s', method '%s'. Call to '%s'.",
-                            className.replace('/', '.'), mn.name, methodInsn.owner.replace('/', '.'));
-                    findings.add(finding);
-                }
-                String lowerCaseMethodName = methodInsn.name.toLowerCase();
-                if (CRYPTO_PATTERNS.stream().anyMatch(lowerCaseMethodName::contains)) {
-                    String finding = String.format(
-                            "INFO: Potential crypto activity in class '%s', method '%s'. Method name contains crypto-related keyword: '%s'.",
-                            className.replace('/', '.'), mn.name, methodInsn.name);
-                    findings.add(finding);
-                }
-            }
-        }
-    }
-
-    private void checkForSuspiciousStrings(String text, String reasonPrefix, String className, String methodName,
-            Set<String> findings) {
-        for (Map.Entry<Pattern, String> entry : SUSPICIOUS_STRING_PATTERNS.entrySet()) {
-            if (entry.getKey().matcher(text).find()) {
-                String finding = String.format(
-                        "Suspicious string in class '%s', method '%s'. Reason: %s (%s: '%s')",
-                        className.replace('/', '.'), methodName, entry.getValue(), reasonPrefix,
-                        text.substring(0, Math.min(text.length(), 50)) + "...");
-                findings.add(finding);
-            }
-        }
-    }
-
-    private void analyzeReflectionChain(ClassNode cn, Set<String> findings) {
-        for (MethodNode mn : cn.methods) {
-            List<AbstractInsnNode> reflectionChain = new ArrayList<>();
-            for (AbstractInsnNode insn : mn.instructions) {
-                if (isReflectionCall(insn)) {
-                    reflectionChain.add(insn);
-                }
-            }
-            if (reflectionChain.size() >= 3) {
-                String finding = String.format(
-                        "CRITICAL: Reflection chain detected in class '%s', method '%s'. This could be an obfuscated backdoor.",
-                        cn.name.replace('/', '.'),
-                        mn.name);
-                findings.add(finding);
-            }
-        }
-    }
-
-    private boolean isReflectionCall(AbstractInsnNode insn) {
-        if (insn.getType() == AbstractInsnNode.METHOD_INSN) {
-            MethodInsnNode methodInsn = (MethodInsnNode) insn;
-            String owner = methodInsn.owner;
-            String name = methodInsn.name;
-            return (owner.equals("java/lang/Class") && name.equals("forName")) ||
-                    (owner.equals("java/lang/Class") && name.equals("getMethod")) ||
-                    (owner.equals("java/lang/reflect/Method") && name.equals("invoke"));
-        }
-        return false;
-    }
-
-    private boolean isBase64(String s) {
-        return s.length() > 20 && s.matches("^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$");
-    }
-
-    private String bytesToHex(byte[] bytes) {
-        StringBuilder sb = new StringBuilder();
-        for (byte b : bytes) {
-            sb.append(String.format("%02x", b));
-        }
-        return sb.toString();
-    }
-
-    private void analyzeBehavioralFingerprint(ClassNode cn, Set<String> findings) {
-        int networkCallCount = 0;
-        int fileIOCount = 0;
-        int reflectionCallCount = 0;
-        int cryptoOperationCount = 0;
-        Set<String> externalDomains = new HashSet<>();
+    private void analyzeClass(ClassNode classNode, List<String> findings, Map<String, Integer> findingCounts) {
+        int networkCalls = 0;
+        int fileIOCalls = 0;
+        int reflectionCalls = 0;
+        int cryptoCalls = 0;
+        Set<String> domains = new HashSet<>();
         StringBuilder allStrings = new StringBuilder();
 
-        for (MethodNode mn : cn.methods) {
-            for (AbstractInsnNode insn : mn.instructions) {
+        for (MethodNode method : classNode.methods) {
+            boolean isUnreachable = false; 
+
+            for (AbstractInsnNode insn : method.instructions) {
                 if (insn.getType() == AbstractInsnNode.METHOD_INSN) {
                     MethodInsnNode methodInsn = (MethodInsnNode) insn;
-                    String owner = methodInsn.owner;
+                    String key = methodInsn.owner + "." + methodInsn.name;
 
-                    if (NETWORK_CALL_PATTERNS.stream().anyMatch(owner::startsWith)) {
-                        networkCallCount++;
+                    if (SUSPICIOUS_CALLS.containsKey(key)) {
+                        String reason = SUSPICIOUS_CALLS.get(key);
+                        findings.add("Suspicious bytecode call to '" + key + "' in class '"
+                                + classNode.name.replace('/', '.') + "', method '" + method.name + "'. Reason: "
+                                + reason);
                     }
-                    if (owner.startsWith("java/io/")) {
-                        fileIOCount++;
+
+                    if (key.contains("java/net") || key.contains("org/apache/http"))
+                        networkCalls++;
+                    if (key.contains("java/io") || key.contains("java/nio"))
+                        fileIOCalls++;
+                    if (key.contains("java/lang/reflect"))
+                        reflectionCalls++;
+                    if (CRYPTO_PATTERNS.contains(methodInsn.owner)) {
+                        cryptoCalls++;
+                        logger.info("Cryptographic API usage detected in class '" + classNode.name.replace('/', '.')
+                                + "', method '" + method.name + "'. Call to '" + methodInsn.owner.replace('/', '.')
+                                + "'.");
                     }
-                    if (isReflectionCall(insn)) {
-                        reflectionCallCount++;
+
+                    
+                    if (isReflectionChain(methodInsn)) {
+                        findings.add("CRITICAL: Reflection chain detected in class '" + classNode.name.replace('/', '.')
+                                + "', method '" + method.name + "'. This could be an obfuscated backdoor.");
                     }
-                    if (CRYPTO_PATTERNS.contains(owner)
-                            || CRYPTO_PATTERNS.stream().anyMatch(methodInsn.name.toLowerCase()::contains)) {
-                        cryptoOperationCount++;
-                    }
+
+                } else if (insn.getType() == AbstractInsnNode.INVOKE_DYNAMIC_INSN) {
+                    String msg = "MEDIUM: InvokeDynamic detected in " + classNode.name.replace('/', '.') + "."
+                            + method.name + " - possible obfuscation or lambda";
+                    addFindingWithLimit(findings, findingCounts, "INVOKE_DYNAMIC", msg, MAX_INVOKE_DYNAMIC_LOGS);
                 } else if (insn.getType() == AbstractInsnNode.LDC_INSN) {
                     LdcInsnNode ldc = (LdcInsnNode) insn;
                     if (ldc.cst instanceof String) {
-                        String str = (String) ldc.cst;
-                        allStrings.append(str);
-                        extractDomains(str, externalDomains);
+                        String s = (String) ldc.cst;
+                        allStrings.append(s);
+                        checkSuspiciousString(s, classNode.name, method.name, findings);
+                        extractDomains(s, domains);
                     }
                 }
             }
+
+            
+            
+            
+            if (isUnreachable) {
+                String msg = "HIGH: Unreachable code detected in class '" + classNode.name.replace('/', '.')
+                        + "', method '" + method.name + "'. This could be a hidden payload.";
+                addFindingWithLimit(findings, findingCounts, "UNREACHABLE", msg, MAX_UNREACHABLE_LOGS);
+            }
         }
 
+        
         double stringEntropy = calculateShannonEntropy(allStrings.toString());
-
         BehaviorFingerprint fingerprint = new BehaviorFingerprint(
-                networkCallCount,
-                fileIOCount,
-                reflectionCallCount,
-                cryptoOperationCount,
+                networkCalls,
+                fileIOCalls,
+                reflectionCalls,
+                cryptoCalls,
                 stringEntropy,
-                externalDomains);
+                domains);
 
         if (fingerprint.isSuspicious()) {
-            String finding = String.format(
-                    "HIGH: Suspicious behavioral fingerprint detected in class '%s'. Details: [Network Calls: %d, File I/O: %d, Reflection: %d, Crypto: %d, String Entropy: %.2f, Domains: %s]",
-                    cn.name.replace('/', '.'),
-                    fingerprint.networkCallCount(),
-                    fingerprint.fileIOCount(),
-                    fingerprint.reflectionCallCount(),
-                    fingerprint.cryptoOperationCount(),
-                    fingerprint.stringEntropy(),
-                    fingerprint.externalDomains().isEmpty() ? "None"
-                            : String.join(", ", fingerprint.externalDomains()));
-            findings.add(finding);
+            findings.add("HIGH: Suspicious behavioral fingerprint detected in class '"
+                    + classNode.name.replace('/', '.') + "'. Details: " + fingerprint.toString());
         }
     }
 
+    private void addFindingWithLimit(List<String> findings, Map<String, Integer> counts, String type, String message,
+            int limit) {
+        int currentCount = counts.getOrDefault(type, 0);
+        if (currentCount < limit) {
+            findings.add(message);
+        }
+        counts.put(type, currentCount + 1);
+    }
+
+    private void addSuppressedFindingsSummary(List<String> findings, Map<String, Integer> counts) {
+        for (Map.Entry<String, Integer> entry : counts.entrySet()) {
+            String type = entry.getKey();
+            int count = entry.getValue();
+            int limit = type.equals("INVOKE_DYNAMIC") ? MAX_INVOKE_DYNAMIC_LOGS
+                    : type.equals("UNREACHABLE") ? MAX_UNREACHABLE_LOGS : 5;
+
+            if (count > limit) {
+                findings.add("INFO: ... and " + (count - limit) + " more '" + type + "' findings suppressed.");
+            }
+        }
+    }
+
+    private boolean isReflectionChain(MethodInsnNode insn) {
+        return (insn.owner.equals("java/lang/Class") && insn.name.equals("forName")) ||
+                (insn.owner.equals("java/lang/reflect/Method") && insn.name.equals("invoke"));
+    }
+
+    private void checkSuspiciousString(String s, String className, String methodName, List<String> findings) {
+        for (Map.Entry<String, String> entry : SUSPICIOUS_STRING_PATTERNS.entrySet()) {
+            if (s.matches(".*" + entry.getKey() + ".*")) {
+                
+                if (entry.getKey().contains("http")) {
+                    if (isSafeDomain(s))
+                        continue;
+                }
+
+                String truncated = s.length() > 50 ? s.substring(0, 47) + "..." : s;
+                findings.add("Suspicious string in class '" + className.replace('/', '.') + "', method '" + methodName
+                        + "'. Reason: " + entry.getValue() + " (Contains suspicious string: '" + truncated + "')");
+            }
+        }
+    }
+
+    private boolean isSafeDomain(String url) {
+        return url.contains("google.com") || url.contains("github.com") || url.contains("spigotmc.org")
+                || url.contains("bstats.org");
+    }
+
     private void extractDomains(String text, Set<String> domains) {
-        Matcher matcher = Pattern.compile("(?:https?://|www\\.)([^/\\s]+)").matcher(text);
+        Pattern pattern = Pattern.compile("(?:https?://|www\\.)([^/\\s]+)");
+        Matcher matcher = pattern.matcher(text);
         while (matcher.find()) {
             domains.add(matcher.group(1));
         }
@@ -344,5 +248,4 @@ public class BytecodeAnalyzer {
         }
         return entropy;
     }
-
 }

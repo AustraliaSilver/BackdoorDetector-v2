@@ -26,19 +26,12 @@ import backdoordetected.utils.StandaloneLogger;
 public class Main {
     private static final Logger logger = Logger.getLogger(Main.class.getName());
     private static final String VERSION = "1.0.2";
-    private static final String CONFIG_FILE_NAME = "config.properties";
-
-    public static String apiKey1;
-    public static String model1;
-    public static String apiKey2;
-    public static String model2;
-    private static boolean enableGemini2;
 
     public static void main(String[] args) {
         setupLogger();
         printBanner();
 
-        createAndLoadConfig();
+        ConfigService config = ConfigService.getInstance();
 
         if (args.length < 2 || !args[0].equalsIgnoreCase("scan")) {
             printUsage();
@@ -60,7 +53,7 @@ public class Main {
         }
 
         if (mode.requiresApiKey()) {
-            if (!isApiKeyConfigured()) {
+            if (!isApiKeyConfigured(config)) {
                 logger.severe("Scan mode " + mode.name() + " requires a valid Gemini API key.");
                 logger.severe("   Please configure API key in config.properties");
                 logger.info("\nAlternative: Use non-AI modes like DATA_FLOW or BYTECODE");
@@ -80,7 +73,7 @@ public class Main {
         }
 
         printScanHeader(pluginFile, mode);
-        executeScan(pluginFile, mode);
+        executeScan(pluginFile, mode, config);
     }
 
     private static void printBanner() {
@@ -112,11 +105,15 @@ public class Main {
         System.out.println("╚═══════════════════════════════════════════════════════╝\n");
     }
 
-    private static void executeScan(File pluginFile, ScanMode mode) {
+    private static void executeScan(File pluginFile, ScanMode mode, ConfigService config) {
         BlockingQueue<PrioritizedFile> queue = new LinkedBlockingQueue<>();
         queue.offer(new PrioritizedFile(pluginFile, 0));
 
-        if (mode == ScanMode.AI_MODERN || mode == ScanMode.AI || mode == ScanMode.AI_BACKDOOR_FOCUS) {
+        boolean allowParallelAi = config.getBooleanProperty("ai_parallel_scanning", false);
+
+        if (mode.requiresApiKey() && !allowParallelAi) {
+            logger.info("AI scan mode detected. Running in sequential mode to avoid rate limits.");
+            logger.info("To enable parallel AI scans, set 'ai_parallel_scanning=true' in config.properties.");
             startSequentialScan(queue, mode, pluginFile.getName());
         } else {
             startParallelScan(queue, mode, pluginFile.getName());
@@ -130,99 +127,18 @@ public class Main {
         logger.addHandler(handler);
     }
 
-    private static boolean createAndLoadConfig() {
-        File configFile = new File(CONFIG_FILE_NAME);
-
-        if (!configFile.exists()) {
-            try (FileOutputStream fos = new FileOutputStream(configFile)) {
-                Properties defaultProps = new Properties();
-                defaultProps.setProperty("gemini_api_key", "YOUR_FIRST_API_KEY");
-                defaultProps.setProperty("gemini_model", "gemini-2.5-pro");
-                defaultProps.setProperty("enable_gemini_2", "true");
-                defaultProps.setProperty("gemini_api_key_2", "YOUR_SECOND_API_KEY");
-                defaultProps.setProperty("gemini_model_2", "gemini-2.5-flash");
-                defaultProps.setProperty("codeql_executable_path", "");
-                defaultProps.store(fos, "Backdoor Detector Configuration");
-
-                System.out.println("Created config.properties file");
-                System.out.println("Add your Gemini API keys to use AI features\n");
-                return false;
-            } catch (IOException e) {
-                logger.severe("Could not create config.properties: " + e.getMessage());
-                return false;
-            }
-        }
-
-        Properties props = new Properties();
-        try (FileInputStream fis = new FileInputStream(configFile)) {
-            props.load(fis);
-            apiKey1 = props.getProperty("gemini_api_key", "");
-            model1 = props.getProperty("gemini_model", "gemini-2.0-flash-exp");
-            enableGemini2 = Boolean.parseBoolean(props.getProperty("enable_gemini_2", "false"));
-            apiKey2 = props.getProperty("gemini_api_key_2", "");
-            model2 = props.getProperty("gemini_model_2", "gemini-2.0-flash-exp");
-            return true;
-        } catch (IOException e) {
-            logger.severe("Could not load config.properties: " + e.getMessage());
-            return false;
-        }
-    }
-
-    public static String getConfigProperty(String key) {
-        Properties props = new Properties();
-        try (FileInputStream fis = new FileInputStream(CONFIG_FILE_NAME)) {
-            props.load(fis);
-            String value = props.getProperty(key);
-            return (value == null || value.isBlank()) ? null : value;
-        } catch (IOException e) {
-            return null;
-        }
-    }
-
-    public static void setConfigProperty(String key, String value) {
-        Properties props = new Properties();
-        try (FileInputStream fis = new FileInputStream(CONFIG_FILE_NAME)) {
-            props.load(fis);
-            props.setProperty(key, value);
-            try (FileOutputStream fos = new FileOutputStream(CONFIG_FILE_NAME)) {
-                props.store(fos, "Backdoor Detector Configuration");
-            }
-        } catch (IOException e) {
-            logger.warning("Could not save property to config file: " + e.getMessage());
-        }
-    }
-
-    private static boolean isApiKeyConfigured() {
-        return apiKey1 != null &&
-                !apiKey1.isEmpty() &&
-                !apiKey1.equals("YOUR_FIRST_API_KEY") &&
-                !apiKey1.startsWith("YOUR_");
+    private static boolean isApiKeyConfigured(ConfigService config) {
+        String apiKey = config.getProperty("gemini_api_key");
+        return apiKey != null && !apiKey.isEmpty() && !apiKey.startsWith("YOUR_");
     }
 
     private static void startSequentialScan(BlockingQueue<PrioritizedFile> queue,
             ScanMode mode, String pluginName) {
         CountDownLatch latch = new CountDownLatch(1);
         ExecutorService executor = Executors.newFixedThreadPool(1);
+        PluginOrchestrator orchestrator = ServiceFactory.createPluginOrchestrator(mode);
 
-        if (mode == ScanMode.AI_MODERN || mode == ScanMode.AI || mode == ScanMode.AI_BACKDOOR_FOCUS) {
-            backdoordetected.services.DeobfuscationService deobfuscator = new backdoordetected.services.DeobfuscationService();
-            backdoordetected.services.AnalysisCoordinator analyzer = new backdoordetected.services.AnalysisCoordinator();
-            backdoordetected.services.AIAnalysisService aiService = new backdoordetected.services.AIAnalysisService(
-                    apiKey1, model1, apiKey2, model2);
-            backdoordetected.services.ResultFormatter formatter = new backdoordetected.services.ResultFormatter();
-            backdoordetected.services.PluginOrchestrator orchestrator = new backdoordetected.services.PluginOrchestrator(
-                    deobfuscator, analyzer, aiService, formatter);
-
-            executor.submit(new backdoordetected.PluginWorkerNew(queue, orchestrator, "SCANNER", mode, latch));
-        } else {
-            backdoordetected.services.DeobfuscationService deobfuscator = new backdoordetected.services.DeobfuscationService();
-            backdoordetected.services.AnalysisCoordinator analyzer = new backdoordetected.services.AnalysisCoordinator();
-            backdoordetected.services.ResultFormatter formatter = new backdoordetected.services.ResultFormatter();
-            backdoordetected.services.PluginOrchestrator orchestrator = new backdoordetected.services.PluginOrchestrator(
-                    deobfuscator, analyzer, null, formatter);
-
-            executor.submit(new PluginWorkerNew(queue, orchestrator, "SCANNER", mode, latch));
-        }
+        executor.submit(new PluginWorkerNew(queue, orchestrator, "SCANNER", mode, latch));
 
         try {
             latch.await();
@@ -242,32 +158,11 @@ public class Main {
 
         ExecutorService executor = Executors.newFixedThreadPool(numThreads);
         CountDownLatch latch = new CountDownLatch(numThreads);
+        PluginOrchestrator orchestrator = ServiceFactory.createPluginOrchestrator(mode);
 
-        if (mode == ScanMode.AI_MODERN || mode == ScanMode.AI || mode == ScanMode.AI_BACKDOOR_FOCUS) {
-            backdoordetected.services.DeobfuscationService deobfuscator = new backdoordetected.services.DeobfuscationService();
-            backdoordetected.services.AnalysisCoordinator analyzer = new backdoordetected.services.AnalysisCoordinator();
-            backdoordetected.services.AIAnalysisService aiService = new backdoordetected.services.AIAnalysisService(
-                    apiKey1, model1, apiKey2, model2);
-            backdoordetected.services.ResultFormatter formatter = new backdoordetected.services.ResultFormatter();
-            backdoordetected.services.PluginOrchestrator orchestrator = new backdoordetected.services.PluginOrchestrator(
-                    deobfuscator, analyzer, aiService, formatter);
-
-            for (int i = 0; i < numThreads; i++) {
-                executor.submit(
-                        new backdoordetected.PluginWorkerNew(queue, orchestrator, "WORKER-" + (i + 1), mode, latch));
-            }
-        } else {
-            backdoordetected.services.DeobfuscationService deobfuscator = new backdoordetected.services.DeobfuscationService();
-            backdoordetected.services.AnalysisCoordinator analyzer = new backdoordetected.services.AnalysisCoordinator();
-            backdoordetected.services.AIAnalysisService aiService = null;
-            backdoordetected.services.ResultFormatter formatter = new backdoordetected.services.ResultFormatter();
-            backdoordetected.services.PluginOrchestrator orchestrator = new backdoordetected.services.PluginOrchestrator(
-                    deobfuscator, analyzer, aiService, formatter);
-
-            for (int i = 0; i < numThreads; i++) {
-                executor.submit(
-                        new PluginWorkerNew(queue, orchestrator, "WORKER-" + (i + 1), mode, latch));
-            }
+        for (int i = 0; i < numThreads; i++) {
+            executor.submit(
+                    new PluginWorkerNew(queue, orchestrator, "WORKER-" + (i + 1), mode, latch));
         }
 
         try {
