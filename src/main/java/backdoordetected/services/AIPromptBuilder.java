@@ -2,44 +2,43 @@ package backdoordetected.services;
 
 import java.util.ArrayList;
 import java.util.List;
-
 public class AIPromptBuilder {
-    private List<String> suspiciousFiles = new ArrayList<>();
-    private String findings = "";
-    private String code = "";
-    private String directoryTree = "";
-    private boolean hasKnownBackdoor = false;
+  private List<String> suspiciousFiles = new ArrayList<>();
+  private String findings = "";
+  private String code = "";
+  private String directoryTree = "";
+  private boolean hasKnownBackdoor = false;
 
-    public AIPromptBuilder withSuspiciousFiles(List<String> files) {
-        this.suspiciousFiles = files != null ? new ArrayList<>(files) : new ArrayList<>();
-        return this;
-    }
+  public AIPromptBuilder withSuspiciousFiles(List<String> files) {
+    this.suspiciousFiles = files != null ? new ArrayList<>(files) : new ArrayList<>();
+    return this;
+  }
 
-    public AIPromptBuilder withFindings(String findings) {
-        this.findings = findings != null ? findings : "";
-        return this;
-    }
+  public AIPromptBuilder withFindings(String findings) {
+    this.findings = findings != null ? findings : "";
+    return this;
+  }
 
-    public AIPromptBuilder withCode(String code) {
-        this.code = code != null ? code : "";
-        return this;
-    }
+  public AIPromptBuilder withCode(String code) {
+    this.code = code != null ? code : "";
+    return this;
+  }
 
-    public AIPromptBuilder withDirectoryTree(String tree) {
-        this.directoryTree = tree != null ? tree : "";
-        return this;
-    }
+  public AIPromptBuilder withDirectoryTree(String tree) {
+    this.directoryTree = tree != null ? tree : "";
+    return this;
+  }
 
-    public AIPromptBuilder withKnownBackdoorDetected(boolean detected) {
-        this.hasKnownBackdoor = detected;
-        return this;
-    }
+  public AIPromptBuilder withKnownBackdoorDetected(boolean detected) {
+    this.hasKnownBackdoor = detected;
+    return this;
+  }
 
-    public String build() {
-        String fileList = suspiciousFiles.isEmpty() ? "N/A" : String.join(", ", suspiciousFiles);
+  public String build() {
+    String fileList = suspiciousFiles.isEmpty() ? "N/A" : String.join(", ", suspiciousFiles);
 
-        return String.format(
-                """
+    return String.format(
+        """
                         You are a world-class Minecraft plugin security expert. Your **only mission** is to determine if this plugin contains a **hidden, malicious backdoor**. You must be extremely precise and avoid false positives.
 
                         **CRITICAL INSTRUCTIONS:**
@@ -80,6 +79,6 @@ public class AIPromptBuilder {
                         ### BRIEF REASONING
                         Provide a concise explanation. If you found a true backdoor, explain it first. If you only found configurable features that can be abused (rule #2), explain that clearly and state that it's not a true backdoor but a configuration risk.
                         """,
-                code, directoryTree, fileList, findings);
-    }
+        code, directoryTree, fileList, findings);
+  }
 }

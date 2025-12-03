@@ -1,0 +1,5 @@
+backdoordetected.analyzers.EventTriggerAnalyzer
+backdoordetected.analyzers.BytecodeAnalyzer
+backdoordetected.analyzers.DataFlowAnalyzer
+backdoordetected.analyzers.ObfuscationAnalyzer
+backdoordetected.detection.SootTaintAnalyzer

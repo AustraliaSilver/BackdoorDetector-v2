@@ -5,7 +5,4 @@ import java.util.List;
 import java.util.Map;
 
 public record DecompilationResult(
-        List<Path> javaFiles,
-        Map<Path, Path> javaToClassMap,
-        Path workingDirectory) {
-}
+    List<Path> javaFiles, Map<Path, Path> javaToClassMap, Path workingDirectory) {}
