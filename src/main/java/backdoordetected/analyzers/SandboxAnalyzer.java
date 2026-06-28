@@ -1,7 +1,7 @@
 package backdoordetected.analyzers;
 
 import backdoordetected.utils.StandaloneLogger;
-import com.github.javaparser.StaticJavaParser;
+import backdoordetected.utils.SafeJavaParser;
 import com.github.javaparser.ast.CompilationUnit;
 import com.github.javaparser.ast.body.MethodDeclaration;
 import com.github.javaparser.ast.expr.MethodCallExpr;
@@ -34,7 +34,7 @@ public class SandboxAnalyzer {
     Map<String, List<String>> eventFindings = new HashMap<>();
     for (Path file : javaFiles) {
       try {
-        CompilationUnit cu = StaticJavaParser.parse(file);
+        CompilationUnit cu = SafeJavaParser.parse(file);
         EventHandlerVisitor visitor = new EventHandlerVisitor(eventFindings);
         visitor.visit(cu, null);
       } catch (IOException e) {

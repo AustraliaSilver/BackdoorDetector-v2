@@ -16,9 +16,8 @@ public class ResultFormatter {
     result.append("### Analysis Report ###\n\n");
 
     LMXBackdoorDetector.BackdoorScanResult backdoorScan = comprehensiveResult.backdoorScan();
-    boolean lmxStringLiteralFound = comprehensiveResult.lmxStringLiteralFound();
 
-    if (backdoorScan.hasAnyBackdoor() || lmxStringLiteralFound) {
+    if (backdoorScan.hasAnyBackdoor()) {
       result.append("## Known Backdoor Detected!\n");
       result.append("**Malicious:** YES\n");
       result.append("**Confidence:** 100%\n");
@@ -33,12 +32,6 @@ public class ResultFormatter {
       if (backdoorScan.hasOpenEctasy) {
         result.append(
             "- Confirmed: OpenEctasy malware signature detected ('bodyalhoha' directory).\n");
-      }
-      if (lmxStringLiteralFound) {
-        result.append(
-            "- Confirmed: L.M.X backdoor pattern found as string literal in decompiled code. ");
-        result.append(
-            "This indicates a strong likelihood of the plugin being the L.M.X backdoor itself or a variant.\n");
       }
       result.append("This is an unequivocally known and critical backdoor/malware pattern.\n\n");
     } else {

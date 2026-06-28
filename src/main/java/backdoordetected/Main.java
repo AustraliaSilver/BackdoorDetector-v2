@@ -3,6 +3,8 @@ package backdoordetected;
 import backdoordetected.models.PrioritizedFile;
 import backdoordetected.services.*;
 import backdoordetected.utils.ScanMode;
+import com.github.javaparser.ParserConfiguration;
+import com.github.javaparser.StaticJavaParser;
 import java.io.File;
 import java.util.ArrayList;
 import java.util.List;
@@ -17,11 +19,12 @@ import java.util.logging.SimpleFormatter;
 
 public class Main {
   private static final Logger logger = Logger.getLogger(Main.class.getName());
-  private static final String VERSION = "1.0.2";
+  private static final String VERSION = "1.1.1";
 
   public static void main(String[] args) {
     setupLogger();
     printBanner();
+    StaticJavaParser.getConfiguration().setLanguageLevel(ParserConfiguration.LanguageLevel.JAVA_18);
 
     ConfigService config = ConfigService.getInstance();
 
@@ -45,9 +48,14 @@ public class Main {
     }
 
     if (mode.requiresApiKey()) {
-      if (!isApiKeyConfigured(config)) {
-        logger.severe("Scan mode " + mode.name() + " requires a valid Gemini API key.");
-        logger.severe("   Please configure API key in config.properties");
+      boolean hasApiKey = isApiKeyConfigured(config);
+      boolean hasBackend = "backend".equalsIgnoreCase(config.getProperty("primary_ai", "backend"))
+          || (config.getProperty("ai_backend_url") != null
+              && !config.getProperty("ai_backend_url").isEmpty()
+              && !config.getProperty("ai_backend_url").startsWith("YOUR_"));
+      if (!hasApiKey && !hasBackend) {
+        logger.severe("Scan mode " + mode.name() + " requires a valid Gemini API key or ai_backend_url.");
+        logger.severe("   Please configure API key or backend URL in config.properties");
         logger.info("\nAlternative: Use non-AI modes like DATA_FLOW or BYTECODE");
         return;
       }

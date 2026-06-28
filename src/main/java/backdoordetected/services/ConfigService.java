@@ -51,10 +51,11 @@ public class ConfigService {
     try (FileOutputStream fos = new FileOutputStream(configFile)) {
       Properties defaultProps = new Properties();
       defaultProps.setProperty("gemini_api_key", "YOUR_FIRST_API_KEY");
-      defaultProps.setProperty("gemini_model", "gemini-1.5-pro-latest");
+      defaultProps.setProperty("gemini_model", "gemini-3.5-flash");
       defaultProps.setProperty("enable_gemini_2", "true");
       defaultProps.setProperty("gemini_api_key_2", "YOUR_SECOND_API_KEY");
-      defaultProps.setProperty("gemini_model_2", "gemini-1.5-flash-latest");
+      defaultProps.setProperty("gemini_model_2", "gemini-3-flash-preview");
+      defaultProps.setProperty("primary_ai", "backend");
       defaultProps.setProperty("codeql_executable_path", "");
       defaultProps.setProperty("ai_parallel_scanning", "false");
       defaultProps.setProperty("enable_analyzer_parallel", "false");

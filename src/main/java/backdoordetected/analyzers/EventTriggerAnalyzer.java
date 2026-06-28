@@ -4,8 +4,7 @@ import backdoordetected.models.EventTriggerAnalysisResult;
 import backdoordetected.models.PluginAnalysisResult;
 import backdoordetected.services.PluginAnalyzer;
 import backdoordetected.utils.ScanMode;
-import com.github.javaparser.ParseProblemException;
-import com.github.javaparser.StaticJavaParser;
+import backdoordetected.utils.SafeJavaParser;
 import com.github.javaparser.ast.CompilationUnit;
 import com.github.javaparser.ast.Node;
 import com.github.javaparser.ast.body.MethodDeclaration;
@@ -62,16 +61,14 @@ public class EventTriggerAnalyzer implements PluginAnalyzer {
 
     for (Path file : javaFiles) {
       try {
-        CompilationUnit cu = StaticJavaParser.parse(file);
+        CompilationUnit cu = SafeJavaParser.parse(file);
 
         cu.accept(new DeobfuscationVisitor(), null);
 
         cu.accept(new EventTriggerVisitor(file, allFindings), null);
       } catch (IOException e) {
-        logger.warning("Failed to read file: " + file.getFileName());
-      } catch (ParseProblemException e) {
         failedFiles.add(file);
-        logger.warning("Failed to parse file (syntax error): " + file.getFileName());
+        logger.warning("Failed to parse file: " + file.getFileName());
       }
       processedCount++;
 

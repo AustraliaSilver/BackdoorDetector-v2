@@ -42,7 +42,8 @@ public class SootAnalysisResult extends PluginAnalysisResult {
 
   @Override
   public boolean hasHighSeverityFindings() {
-    return taintFlows.stream().anyMatch(flow -> "CRITICAL".equals(flow.severity()));
+    return taintFlows.stream().anyMatch(flow -> "CRITICAL".equals(flow.severity()))
+        || super.hasHighSeverityFindings();
   }
 
   @Override

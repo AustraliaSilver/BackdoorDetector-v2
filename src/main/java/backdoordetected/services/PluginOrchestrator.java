@@ -1,6 +1,7 @@
 package backdoordetected.services;
 
 import backdoordetected.exceptions.AnalysisException;
+import backdoordetected.models.BackendAnalysisResult;
 import backdoordetected.models.ComprehensiveAnalysisResult;
 import backdoordetected.utils.ScanMode;
 import backdoordetected.utils.StandaloneLogger;
@@ -15,20 +16,36 @@ public class PluginOrchestrator {
   private final DeobfuscationService deobfuscationService;
   private final AnalysisCoordinator analysisCoordinator;
   private final AIAnalysisService aiAnalysisService;
+  private final BackendAnalysisService backendAnalysisService;
   private final ResultFormatter resultFormatter;
   private final AIPromptBuilder promptBuilder;
 
-  public PluginOrchestrator(
-      DeobfuscationService deobfuscationService,
-      AnalysisCoordinator analysisCoordinator,
-      AIAnalysisService aiAnalysisService,
-      ResultFormatter resultFormatter) {
-    this.deobfuscationService = deobfuscationService;
-    this.analysisCoordinator = analysisCoordinator;
-    this.aiAnalysisService = aiAnalysisService;
-    this.resultFormatter = resultFormatter;
-    this.promptBuilder = new AIPromptBuilder();
-  }
+private final String primaryAi;
+
+   public PluginOrchestrator(
+       DeobfuscationService deobfuscationService,
+       AnalysisCoordinator analysisCoordinator,
+       AIAnalysisService aiAnalysisService,
+       BackendAnalysisService backendAnalysisService,
+       ResultFormatter resultFormatter) {
+     this(deobfuscationService, analysisCoordinator, aiAnalysisService, backendAnalysisService, resultFormatter, null);
+   }
+
+   public PluginOrchestrator(
+       DeobfuscationService deobfuscationService,
+       AnalysisCoordinator analysisCoordinator,
+       AIAnalysisService aiAnalysisService,
+       BackendAnalysisService backendAnalysisService,
+       ResultFormatter resultFormatter,
+       String primaryAi) {
+     this.deobfuscationService = deobfuscationService;
+     this.analysisCoordinator = analysisCoordinator;
+     this.aiAnalysisService = aiAnalysisService;
+     this.backendAnalysisService = backendAnalysisService;
+     this.resultFormatter = resultFormatter;
+     this.promptBuilder = new AIPromptBuilder();
+     this.primaryAi = primaryAi != null ? primaryAi.toLowerCase() : "backend";
+   }
 
   public String scan(Path pluginPath, ScanMode scanMode, String workerName) {
     try {
@@ -37,35 +54,40 @@ public class PluginOrchestrator {
       ComprehensiveAnalysisResult analysis =
           analysisCoordinator.analyze(pathToAnalyze, scanMode, workerName);
 
-      boolean hasSuspiciousFiles = !analysis.suspiciousFiles().isEmpty();
-      boolean isHeavilyObfuscated = analysis.obfuscationResult().isHeavilyObfuscated();
+boolean hasSuspiciousFiles = !analysis.suspiciousFiles().isEmpty();
+       boolean hasFindings = analysis.hasFindings();
 
-      if (!hasSuspiciousFiles && !analysis.hasFindings()) {
+      if (!hasSuspiciousFiles && !hasFindings) {
         logger.info("No suspicious files or triggers found; skipping AI analyze.");
         return "**Malicious:** NO\n**Confidence:** 95%\n**Severity:** NONE\n**Vulnerability Type:** Clean\n\n### BRIEF REASONING\nNo suspicious patterns or files detected.";
       }
 
-      String aiResult = null;
-      if (aiAnalysisService != null
-          && (scanMode == ScanMode.AI_MODERN
-              || scanMode == ScanMode.AI
-              || scanMode == ScanMode.AI_BACKDOOR_FOCUS)) {
+      if (scanMode == ScanMode.AI_MODERN
+          || scanMode == ScanMode.AI
+          || scanMode == ScanMode.AI_BACKDOOR_FOCUS) {
 
-        if (hasSuspiciousFiles || analysis.hasHighSeverityFindings() || isHeavilyObfuscated) {
-          logger.info(
-              "Suspicious files detected ("
-                  + analysis.suspiciousFiles().size()
-                  + " file(s)). Sending to AI for analysis...");
+        logger.info("Findings detected. Analyzing via AI...");
+
+        String aiResult = null;
+
+        if (backendAnalysisService != null) {
+          logger.info("Trying local AI backend...");
+          BackendAnalysisResult backendResult = backendAnalysisService.analyze(
+              pluginPath, analysis, workerName);
+          if (backendResult != null) {
+            return formatBackendResult(backendResult);
+          }
+          logger.warning("Local AI backend failed or unavailable. Falling back to Gemini...");
+        }
+
+        if (aiAnalysisService != null) {
           String prompt = buildPrompt(analysis);
           aiResult = aiAnalysisService.analyze(prompt, pluginPath.getFileName().toString());
-        } else {
-          logger.info("Only LOW severity findings without suspicious files; skipping AI analyze.");
-          return "**Malicious:** NO\n**Confidence:** 90%\n**Severity:** LOW\n**Vulnerability Type:** Minor Issues\n\n### BRIEF REASONING\nOnly low-severity patterns detected without suspicious files.";
         }
-      }
 
-      if (aiResult != null && !aiResult.isEmpty()) {
-        return aiResult;
+        if (aiResult != null && !aiResult.isEmpty()) {
+          return aiResult;
+        }
       }
 
       String formattedResult = resultFormatter.formatResult(analysis);
@@ -125,6 +147,28 @@ public class PluginOrchestrator {
   private String sanitizeForPrompt(String input) {
     if (input == null) return "";
     return input.replaceAll("[^a-zA-Z0-9._-]", "_");
+  }
+
+  private String formatBackendResult(BackendAnalysisResult result) {
+    StringBuilder sb = new StringBuilder();
+    sb.append("**Malicious:** ").append(result.isMalicious() ? "YES" : "NO").append("\n");
+    sb.append("**Confidence:** ").append(result.confidence()).append("\n");
+    sb.append("**Risk Score:** ").append(result.riskScore()).append("/100").append("\n");
+    sb.append("**Threat Type:** ").append(result.threatType()).append("\n");
+    sb.append("\n### SUMMARY\n").append(result.summary()).append("\n\n");
+    sb.append("### ANALYSIS\n").append(result.analysis()).append("\n");
+
+    if (!result.keyIndicators().isEmpty()) {
+      sb.append("\n### KEY INDICATORS\n");
+      for (String ind : result.keyIndicators()) {
+        sb.append("- ").append(ind).append("\n");
+      }
+    }
+
+    if (result.cached()) {
+      sb.append("\n_(cached result, ").append(result.elapsedMs()).append("ms)_\n");
+    }
+    return sb.toString();
   }
 
   private String formatEventFindings(java.util.Map<Path, List<String>> findings) {

@@ -7,10 +7,10 @@
 
     <groupId>backdoordetected</groupId>
     <artifactId>BackdoorDetect</artifactId>
-    <version>1.0.0</version>
+    <version>1.1.1</version>
     <packaging>jar</packaging>
 
-    <name>Backdoor Detector - Phase 1</name>
+    <name>Backdoor Detector v2</name>
     <description>Advanced Minecraft Plugin Security Scanner</description>
 
     <properties>

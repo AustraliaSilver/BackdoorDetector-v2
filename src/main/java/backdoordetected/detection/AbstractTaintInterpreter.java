@@ -45,9 +45,6 @@ public class AbstractTaintInterpreter {
       if (stack.isEmpty()) {
         return TaintState.UNKNOWN;
       }
-      if (!stackConstants.isEmpty()) {
-        stackConstants.remove(stackConstants.size() - 1);
-      }
       return stack.remove(stack.size() - 1);
     }
 

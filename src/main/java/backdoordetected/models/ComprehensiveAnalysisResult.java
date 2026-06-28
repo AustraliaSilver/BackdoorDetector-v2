@@ -10,14 +10,13 @@ public record ComprehensiveAnalysisResult(
     Map<Path, List<String>> eventFindings,
     List<Path> failedFiles,
     LMXBackdoorDetector.BackdoorScanResult backdoorScan,
-    boolean lmxStringLiteralFound,
     String directoryTree,
     List<Path> suspiciousFiles,
     String combinedCode,
     Map<String, PluginAnalysisResult> pluginAnalysisResults) {
 
   public boolean hasFindings() {
-    if (!eventFindings.isEmpty() || backdoorScan.hasAnyBackdoor() || lmxStringLiteralFound) {
+    if (!eventFindings.isEmpty() || backdoorScan.hasAnyBackdoor()) {
       return true;
     }
     for (PluginAnalysisResult result : pluginAnalysisResults.values()) {
@@ -29,7 +28,7 @@ public record ComprehensiveAnalysisResult(
   }
 
   public boolean hasKnownBackdoor() {
-    return backdoorScan.hasLMXBackdoor || backdoorScan.hasOpenEctasy || lmxStringLiteralFound;
+    return backdoorScan.hasLMXBackdoor || backdoorScan.hasOpenEctasy;
   }
 
   public boolean hasHighSeverityFindings() {

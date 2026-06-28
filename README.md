@@ -1,46 +1,75 @@
-<h1 align="center">BackdoorDetector-v2</h1>
-<h2 align="center">Open-source tools to scan your minecraft plugins.</h2>
-  
-## 🛡️ BackdoorDetector-v2 Overview 
+# 🛡️ BackdoorDetector-v2 (v1.1.1)
 
-BackdoorDetector is a professional tool designed to analyze the source code of Minecraft plugins (.jar files) in order to detect backdoors, malware, and hidden malicious behaviors within plugins before installing them on the server. The system leverages advanced AI (Gemini), the VineFlower decompiler, and a multi-threaded scanning mechanism to ensure maximum speed and accuracy.
+**BackdoorDetector-v2** is a professional Static Application Security Testing (SAST) analyzer designed to scan Minecraft plugins (`.jar` files) for backdoors, malware, and suspicious hidden behaviors before installing them on your server.
 
-## ✨ Key Features
-🔍 1. Backdoor Scanning with AI (Gemini)
-- Supports Gemini API keys → Enhances AI detection accuracy
+This system leverages multi-layered static analysis at the client level, combined with secure, encrypted communication (Hybrid Encryption) to a private Node.js AI Backend that performs advanced LLM validation and serves a real-time monitoring Web Dashboard.
 
-🧠 2. In‑Depth Code Analysis
-- Fully decompiles plugins using VineFlower -> Faster.
+---
 
-🛡️ 3. Multi‑Layer Static Analysis (Multi‑layer SAST)
-Covers multiple levels of inspection:
-- Data‑flow analysis.
-- Bytecode analysis.
-- Symbolic analysis.
-- YAML file analysis.
-This layered approach helps the tool easily detect deeply hidden backdoors within the code.
+## ✨ Features
 
-⚡ 3. High‑Speed Queue & Multi‑Threaded Scanning
-- Every plugin is copied into a temporary directory and decompiled separately → prevents file conflicts.
-- Intelligent queue system runs on dedicated threads.
-- Automatically re‑scans if an error (ERROR) occurs.
+### 1. Multi-Layered Static Analysis (Client-side)
+The local Java scanner runs several high-speed analysis pipelines:
+* **Bytecode Analysis (ASM9):** Inspects compiled `.class` files for dangerous APIs (`Runtime.exec`, `ProcessBuilder`, custom `ClassLoader`, reflection), calculates Shannon Entropy of string constants to discover obfuscation, and extracts IP/Domain names.
+* **Taint Flow Analysis (Abstract Interpretation):** Tracks untrusted user input (e.g. Chat/Command events) flowing to critical sinks (e.g. OP grant, console command execution, shell spawn) without proper validation/sanitization.
+* **Obfuscation & AST Analyzer (JavaParser):** Evaluates cyclomatic complexity, meaningless identifier names (a, b, c), and XOR loops typically used for class/string decryption.
+* **Signature Detection:** Rapidly inspects the JAR structure using `LMXBackdoorDetector` to instantly identify signatures of known malware families like L.M.X and OpenEctasy.
 
-📦 4. SHA‑256 Cache System
-- Plugins that have already been scanned will not be scanned again → saves time
+### 2. Private AI Backend & Real-time Web Dashboard
+A private backend serves as a secure gateway for LLM evaluation and dashboard visualization:
+* **Hybrid Encryption:** Payloads sent via HTTP are encrypted using a temporary AES-256-GCM key, which is itself encrypted using the server's RSA-4096 public key.
+* **Replay Attack Protection:** Verifies timestamp headers with a max clock skew (5 mins) to prevent attackers from replaying clean scanning payloads.
+* **Proof of Work (PoW) DDoS Prevention:** Clients solve a SHA-256 challenge before submitting scans. Difficulty automatically adjusts dynamically under traffic load to throttle spam.
+* **Multi-tiered Rate Limiting:**
+  * IP-based rate limiting (30 requests/min).
+  * Per-client AI rate limiting (10 queries/min) to safeguard API key quotas.
+  * Server-wide global rate limiting (**1 request/sec**) to prevent CPU resource exhaustion.
+* **Web Dashboard:** A gorgeous dark-themed dashboard styled with CSS Glassmorphism showing:
+  * Total requests, total bytes processed, unique plugins scanned.
+  * Safe vs Malicious ratio chart.
+  * Real-time table feed (refreshing every 8s) showing the last 10 scans with risk scores, verdicts, and indicators.
 
-## 💻 Usage Examples
-- After downloading the .jar file, open Command Prompt and enter:
-``` bash
-java -jar "Path\to\BackdoorDetector-v2.jar" scan "Path\to\plugin-to-scan.jar" <scan_mode (recommended: AI_MODERN)>
+---
+
+## 🛠️ System Architecture
+
 ```
-⚠️ Note:
-- On the first run, a config.properties file will be generated in the execution directory.
-- Once it appears, open the file and enter your Gemini API key.
-  
-## ⚠️ IMPORTANT DISCLAIMER
-- This tool is a Static Application Security Testing (SAST) analyzer. It is designed to detect common threats but CANNOT GUARANTEE detection of 100% of all types of backdoors.
-- This tool is provided "AS IS", WITHOUT WARRANTY. Users assume all risks associated with its use.
+D:\BackdoorDetector-v2
+ ┣ 📂 src/main/java/backdoordetected     # Client-side Java SAST analyzer
+ ┣ 📂 ai-backend                         # Private Node.js AI Backend & Dashboard (Not Open-Source)
+ ┃ ┣ 📂 public                           # Web Dashboard UI files
+ ┃ ┣ 📂 src                              # AI caller and caching mechanisms
+ ┃ ┗ 📜 index.js                         # Express server, Cryptography, PoW, Rate Limiting
+ ┣ 📜 config.properties                  # Client-side settings (minimal config, no backend URL leak)
+ ┗ 📜 pom.xml                            # Maven project configuration
+```
+
+---
+
+## 🚀 How to Use
+
+### 1. Building the Scanner (Client-side)
+Ensure Maven is installed and compile the project:
+```bash
+mvn clean package -DskipTests=true
+```
+The compiled executable fat-jar will be generated at `target/BackdoorDetect-1.1.1.jar`.
+
+### 2. Scanning a Plugin
+Run the scan command:
+```bash
+java -jar target/BackdoorDetect-1.1.1.jar scan "path/to/plugin.jar" AI_MODERN
+```
+* **AI_MODERN:** The default recommended mode. Performs local static analysis, decrypts the PoW challenge, encrypts the findings, and queries the private backend for LLM verification.
+* By default, the client is pre-configured to communicate directly with your private backend server (`http://93.115.101.157:13384`).
+
+---
+
+## ⚠️ Disclaimer
+* This tool is a Static Application Security Testing (SAST) analyzer. While it offers high accuracy, it **CANNOT GUARANTEE** 100% detection of all backdoor types.
+* This tool is provided "AS IS", WITHOUT WARRANTY. Users assume all risks associated with its use.
 
 ## 👥 Join Our Community
 
-Have questions? Found a bug? Want to contribute? **[Join our Discord!](https://discord.gg/aWP5KuCgPU)**
+* Have questions? Found a bug? Want to contribute? **[Join our Discord!](https://discord.gg/aWP5KuCgPU)**
+

@@ -9,6 +9,17 @@ public class ServiceFactory {
     AnalysisCoordinator analyzer = new AnalysisCoordinator();
     ResultFormatter formatter = new ResultFormatter();
     AIAnalysisService aiService = null;
+    BackendAnalysisService backendService = null;
+
+    String primaryAi = config.getProperty("primary_ai", "backend");
+    if ("backend".equalsIgnoreCase(primaryAi)) {
+      String backendUrl = config.getProperty("ai_backend_url");
+      if (backendUrl != null && !backendUrl.isEmpty() && !backendUrl.startsWith("YOUR_")) {
+        backendService = new BackendAnalysisService(backendUrl);
+      } else {
+        backendService = new BackendAnalysisService();
+      }
+    }
 
     if (mode.requiresApiKey()) {
       String apiKey1 = config.getProperty("gemini_api_key");
@@ -18,6 +29,6 @@ public class ServiceFactory {
       aiService = new AIAnalysisService(apiKey1, model1, apiKey2, model2);
     }
 
-    return new PluginOrchestrator(deobfuscator, analyzer, aiService, formatter);
+    return new PluginOrchestrator(deobfuscator, analyzer, aiService, backendService, formatter);
   }
 }

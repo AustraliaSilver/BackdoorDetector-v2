@@ -36,3 +36,15 @@ build/
 
 ### Mac OS ###
 .DS_Store
+
+### AI Backend ###
+ai-backend/
+
+### Local cache & artifacts ###
+decompile_cache/
+temp/
+cp.txt
+ai-backend.zip
+dependency-reduced-pom.xml
+backdoordetected/
+com/

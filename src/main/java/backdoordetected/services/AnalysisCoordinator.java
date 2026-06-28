@@ -13,7 +13,7 @@ import backdoordetected.models.ObfuscationResult;
 import backdoordetected.models.SootAnalysisResult;
 import backdoordetected.utils.ScanMode;
 import backdoordetected.utils.StandaloneLogger;
-import com.github.javaparser.StaticJavaParser;
+import backdoordetected.utils.SafeJavaParser;
 import java.io.*;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.*;
@@ -80,7 +80,6 @@ public class AnalysisCoordinator {
             Map.of(),
             List.of(),
             backdoorScan,
-            false,
             "",
             List.of(),
             "",
@@ -147,6 +146,7 @@ public class AnalysisCoordinator {
           eventFindings = new HashMap<>(parallelResult.getEventFindings());
           failedFiles = parallelResult.getFailedFiles();
           bcFindings = parallelResult.getBytecodeFindings();
+          logger.info("Bytecode analysis complete. Findings: " + bcFindings.size());
         } finally {
           parallelCoordinator.shutdown();
         }
@@ -160,27 +160,25 @@ public class AnalysisCoordinator {
             workerName);
         eventFindings = evRes.getFileFindings();
         failedFiles = evRes.getFailedFiles();
-      }
 
-      logger.info("Running bytecode analysis...");
-      List<Path> allClassFiles = new ArrayList<>(javaToClassMap.values());
-      logger.info("Analyzing " + allClassFiles.size() + " class files...");
-      BytecodeAnalysisResult bcRes = (BytecodeAnalysisResult) bytecodeAnalyzer.analyze(
-          pluginPath, javaFiles, allClassFiles, workingDir, scanMode, workerName);
-      bcFindings = bcRes.getRawFindings();
-      logger.info("Bytecode analysis complete. Findings: " + bcFindings.size());
+        logger.info("Running bytecode analysis...");
+        List<Path> allClassFiles = new ArrayList<>(javaToClassMap.values());
+        logger.info("Analyzing " + allClassFiles.size() + " class files...");
+        BytecodeAnalysisResult bcRes = (BytecodeAnalysisResult) bytecodeAnalyzer.analyze(
+            pluginPath, javaFiles, allClassFiles, workingDir, scanMode, workerName);
+        bcFindings = bcRes.getRawFindings();
+        logger.info("Bytecode analysis complete. Findings: " + bcFindings.size());
 
-      if (!bcFindings.isEmpty()) {
-        logger.info("Bytecode findings details:");
-        for (String finding : bcFindings) {
-          logger.info("  - " + finding);
+        if (!bcFindings.isEmpty()) {
+          logger.info("Bytecode findings details:");
+          for (String finding : bcFindings) {
+            logger.info("  - " + finding);
+          }
+          eventFindings
+              .computeIfAbsent(Paths.get("BYTECODE_ANALYSIS"), k -> new ArrayList<>())
+              .addAll(bcFindings);
         }
-        eventFindings
-            .computeIfAbsent(Paths.get("BYTECODE_ANALYSIS"), k -> new ArrayList<>())
-            .addAll(bcFindings);
       }
-
-      boolean lmxStringLiteralFound = false;
 
       if (backdoorScan.hasAnyBackdoor()) {
         eventFindings
@@ -191,13 +189,11 @@ public class AnalysisCoordinator {
       List<String> specialKeys = Arrays.asList(
           "BYTECODE_ANALYSIS",
           "BYTECODE_FALLBACK",
-          "LMX_STRING_LITERAL",
           "KNOWN_BACKDOOR_SIGNATURES");
       List<Path> suspiciousFiles = eventFindings.keySet().stream()
           .filter(
               p -> !specialKeys.contains(p.getFileName().toString())
                   && !eventFindings.get(p).isEmpty())
-          .filter(p -> !eventFindings.get(p).isEmpty())
           .collect(Collectors.toList());
 
       logger.info("─────────────────────────────────────────────────────");
@@ -256,7 +252,6 @@ public class AnalysisCoordinator {
           eventFindings,
           failedFiles,
           backdoorScan,
-          lmxStringLiteralFound,
           directoryTree,
           suspiciousFiles,
           combinedCode,
@@ -359,7 +354,7 @@ public class AnalysisCoordinator {
     Map<Path, Path> finalMap = new HashMap<>();
     for (Path j : javaFiles) {
       try {
-        StaticJavaParser.parse(j)
+        SafeJavaParser.parse(j)
             .getPrimaryType()
             .ifPresent(
                 type -> {

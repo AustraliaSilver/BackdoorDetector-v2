@@ -4,7 +4,7 @@ import backdoordetected.models.ObfuscationResult;
 import backdoordetected.models.PluginAnalysisResult;
 import backdoordetected.services.PluginAnalyzer;
 import backdoordetected.utils.ScanMode;
-import com.github.javaparser.StaticJavaParser;
+import backdoordetected.utils.SafeJavaParser;
 import com.github.javaparser.ast.CompilationUnit;
 import com.github.javaparser.ast.Node;
 import com.github.javaparser.ast.body.ClassOrInterfaceDeclaration;
@@ -90,7 +90,7 @@ public class ObfuscationAnalyzer implements PluginAnalyzer {
         .forEach(
             file -> {
               try {
-                CompilationUnit cu = StaticJavaParser.parse(file);
+                CompilationUnit cu = SafeJavaParser.parse(file);
                 List<ClassOrInterfaceDeclaration> classes = cu.findAll(ClassOrInterfaceDeclaration.class);
                 for (ClassOrInterfaceDeclaration cls : classes) {
                   totalIdentifiers.incrementAndGet();
@@ -179,7 +179,7 @@ public class ObfuscationAnalyzer implements PluginAnalyzer {
 
     for (Path file : javaFiles) {
       try {
-        CompilationUnit cu = StaticJavaParser.parse(file);
+        CompilationUnit cu = SafeJavaParser.parse(file);
         List<ClassOrInterfaceDeclaration> classes = cu.findAll(ClassOrInterfaceDeclaration.class);
         for (ClassOrInterfaceDeclaration cls : classes) {
           totalIdentifiers++;

@@ -3,7 +3,7 @@ package backdoordetected.cache;
 import backdoordetected.utils.StandaloneLogger;
 import com.github.javaparser.JavaParser;
 import com.github.javaparser.ParseResult;
-import com.github.javaparser.StaticJavaParser;
+import backdoordetected.utils.SafeJavaParser;
 import com.github.javaparser.ast.CompilationUnit;
 import java.io.IOException;
 import java.nio.file.Files;
@@ -44,7 +44,7 @@ public class ASTCache {
       misses++;
     }
     logger.fine("AST cache miss: " + file.getFileName());
-    CompilationUnit ast = StaticJavaParser.parse(file);
+    CompilationUnit ast = SafeJavaParser.parse(file);
     if (cache.size() >= MAX_CACHE_SIZE) {
       evictOldest();
     }

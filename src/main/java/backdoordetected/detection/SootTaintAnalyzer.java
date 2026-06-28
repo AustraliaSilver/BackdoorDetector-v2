@@ -218,7 +218,7 @@ public class SootTaintAnalyzer implements PluginAnalyzer {
                 try {
                   loadClass(jarFile, entry);
                 } catch (Exception e) {
-
+                  logger.fine("[Soot] Failed to load class: " + entry.getName() + " - " + e.getMessage());
                 }
               });
     }

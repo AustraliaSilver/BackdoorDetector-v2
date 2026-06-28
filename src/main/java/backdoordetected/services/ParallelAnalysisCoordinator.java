@@ -50,47 +50,52 @@ public class ParallelAnalysisCoordinator {
 
       if (useDataFlow) {
 
-        eventOrDataFlowFuture =
+        CompletableFuture<DataFlowAnalysisResult> dfFuture =
             CompletableFuture.supplyAsync(
                 () -> {
                   logger.info("[DataFlowAnalyzer] Starting analysis...");
                   try {
                     DataFlowAnalysisResult result =
                         (DataFlowAnalysisResult) dataFlowAnalyzer.analyze(javaFiles, workingDir);
-
-                    Map<Path, List<String>> pathFindings = new ConcurrentHashMap<>();
-                    result
-                        .getFileFindings()
-                        .forEach(
-                            (filename, findings) -> {
-                              javaFiles.stream()
-                                  .filter(p -> p.getFileName().toString().equals(filename))
-                                  .findFirst()
-                                  .ifPresent(p -> pathFindings.put(p, findings));
-                            });
-
                     logger.info(
-                        "[DataFlowAnalyzer] Completed with " + pathFindings.size() + " findings");
-                    return pathFindings;
+                        "[DataFlowAnalyzer] Completed with "
+                            + result.getFileFindings().size()
+                            + " findings");
+                    return result;
                   } catch (Exception e) {
                     logger.severe("[DataFlowAnalyzer] Failed: " + e.getMessage());
-                    return new HashMap<>();
+                    return null;
                   }
                 },
                 executorService);
 
-        failedFilesFuture =
-            CompletableFuture.supplyAsync(
-                () -> {
-                  try {
-                    DataFlowAnalysisResult result =
-                        (DataFlowAnalysisResult) dataFlowAnalyzer.analyze(javaFiles, workingDir);
-                    return result.getFailedFiles();
-                  } catch (Exception e) {
-                    return new ArrayList<>();
+        eventOrDataFlowFuture =
+            dfFuture.thenApply(
+                result -> {
+                  if (result == null) {
+                    return new HashMap<Path, List<String>>();
                   }
-                },
-                executorService);
+                  Map<Path, List<String>> pathFindings = new ConcurrentHashMap<>();
+                  result
+                      .getFileFindings()
+                      .forEach(
+                          (filename, findings) -> {
+                            javaFiles.stream()
+                                .filter(p -> p.getFileName().toString().equals(filename))
+                                .findFirst()
+                                .ifPresent(p -> pathFindings.put(p, findings));
+                          });
+                  return pathFindings;
+                });
+
+        failedFilesFuture =
+            dfFuture.thenApply(
+                result -> {
+                  if (result == null) {
+                    return new ArrayList<Path>();
+                  }
+                  return result.getFailedFiles();
+                });
 
       } else {
 
