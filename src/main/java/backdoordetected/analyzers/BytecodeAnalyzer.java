@@ -191,7 +191,7 @@ public class BytecodeAnalyzer implements PluginAnalyzer {
     public MethodVisitor visitMethod(
         int access, String name, String descriptor, String signature, String[] exceptions) {
       MethodVisitor mv = super.visitMethod(access, name, descriptor, signature, exceptions);
-      // Delegate to our custom method analyzer
+      
       return new BytecodeMethodAnalyzer(
           mv, currentClassName, name, descriptor, findings, findingCounts, domains, allStrings, this); 
     }
@@ -369,7 +369,7 @@ public class BytecodeAnalyzer implements PluginAnalyzer {
       }
       if (key.equals("java/lang/Class.forName")) {
         BytecodeValue classForNameArg = null;
-        if (!consumedValues.isEmpty()) { // For Class.forName, consumedValues should have 1 arg
+        if (!consumedValues.isEmpty()) { 
           classForNameArg = consumedValues.get(0);
         }
 
@@ -444,7 +444,7 @@ public class BytecodeAnalyzer implements PluginAnalyzer {
       try (InputStream is = Files.newInputStream(classFile)) {
         ClassReader reader = new ClassReader(is);
 
-        classAnalyzer = new CustomClassAnalyzer(null, findings, findingCounts, domains, allStrings); // Initialize once
+        classAnalyzer = new CustomClassAnalyzer(null, findings, findingCounts, domains, allStrings); 
         reader.accept(classAnalyzer, ClassReader.EXPAND_FRAMES);
 
       } catch (IOException e) {
@@ -472,7 +472,7 @@ public class BytecodeAnalyzer implements PluginAnalyzer {
     boolean hasHighSeverity = false;
     boolean hasLowSeverity = false;
     Map<String, List<String>> genericFindings = new HashMap<>();
-    genericFindings.put("rawFindings", new ArrayList<>(findings)); // Store raw findings
+    genericFindings.put("rawFindings", new ArrayList<>(findings)); 
 
     for (String finding : findings) {
       String upperFinding = finding.toUpperCase();
@@ -514,7 +514,7 @@ public class BytecodeAnalyzer implements PluginAnalyzer {
   private static void checkSuspiciousString( 
       String s, String className, String methodName, List<String> findings) {
     for (Map.Entry<String, String> entry : SUSPICIOUS_STRING_PATTERNS.entrySet()) {
-      // Use Pattern.compile to avoid re-compiling regex in loop
+      
       Pattern pattern = Pattern.compile(".*" + entry.getKey() + ".*", Pattern.CASE_INSENSITIVE);
       if (pattern.matcher(s).matches()) {
         if (entry.getKey().contains("http")) {

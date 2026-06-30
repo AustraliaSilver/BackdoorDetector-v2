@@ -981,7 +981,7 @@ public class DataFlowAnalyzer {
       Map<String, Set<AbstractValue>> stateAfterThen = thenIsTerminal ? null : deepCopy(variableValues);
       restoreState(stateBefore);
       if (ifStmt.getElseStmt().isPresent()) {
-        applyValidation(pathCond, false); // Negated
+        applyValidation(pathCond, false); 
         pathConditions.push(pathCond.negate());
         ifStmt.getElseStmt().get().accept(this, findings);
         pathConditions.pop();

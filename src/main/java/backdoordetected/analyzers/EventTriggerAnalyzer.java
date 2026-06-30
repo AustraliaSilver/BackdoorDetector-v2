@@ -89,9 +89,9 @@ public class EventTriggerAnalyzer implements PluginAnalyzer {
         lastReportedProgress = currentProgress;
       }
     }
-    System.out.println(); // Newline after progress
+    System.out.println(); 
 
-    // Determine high/low severity from findings
+    
     boolean hasHighSeverity =
         allFindings.values().stream()
             .flatMap(List::stream)

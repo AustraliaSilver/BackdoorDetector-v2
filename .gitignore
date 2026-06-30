@@ -46,5 +46,5 @@ temp/
 cp.txt
 ai-backend.zip
 dependency-reduced-pom.xml
-backdoordetected/
-com/
+/backdoordetected/
+/com/

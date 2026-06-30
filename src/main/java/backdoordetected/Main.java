@@ -19,7 +19,7 @@ import java.util.logging.SimpleFormatter;
 
 public class Main {
   private static final Logger logger = Logger.getLogger(Main.class.getName());
-  private static final String VERSION = "1.1.1";
+  public static final String VERSION = "1.1.2";
 
   public static void main(String[] args) {
     setupLogger();

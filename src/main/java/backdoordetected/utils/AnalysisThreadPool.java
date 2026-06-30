@@ -40,7 +40,7 @@ public class AnalysisThreadPool {
       int configuredSize = config.getIntProperty("global_thread_pool_size", 0);
 
       if (configuredSize > 0) {
-        return Math.min(configuredSize, DEFAULT_POOL_SIZE * 2); // Cap at 2x cores
+        return Math.min(configuredSize, DEFAULT_POOL_SIZE * 2); 
       }
     } catch (Exception e) {
       logger.warning("Failed to get configured pool size: " + e.getMessage());

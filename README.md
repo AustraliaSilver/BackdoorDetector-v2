@@ -1,4 +1,4 @@
-# 🛡️ BackdoorDetector-v2 (v1.1.1)
+# 🛡️ BackdoorDetector-v2 (v1.1.2)
 
 **BackdoorDetector-v2** is a professional Static Application Security Testing (SAST) analyzer designed to scan Minecraft plugins (`.jar` files) for backdoors, malware, and suspicious hidden behaviors before installing them on your server.
 
@@ -24,7 +24,7 @@ A private backend serves as a secure gateway for LLM evaluation and dashboard vi
   * IP-based rate limiting (30 requests/min).
   * Per-client AI rate limiting (10 queries/min) to safeguard API key quotas.
   * Server-wide global rate limiting (**1 request/sec**) to prevent CPU resource exhaustion.
-* **Web Dashboard:** A gorgeous dark-themed dashboard styled with CSS Glassmorphism showing:
+* **Web Dashboard:**
   * Total requests, total bytes processed, unique plugins scanned.
   * Safe vs Malicious ratio chart.
   * Real-time table feed (refreshing every 8s) showing the last 10 scans with risk scores, verdicts, and indicators.
@@ -36,10 +36,6 @@ A private backend serves as a secure gateway for LLM evaluation and dashboard vi
 ```
 D:\BackdoorDetector-v2
  ┣ 📂 src/main/java/backdoordetected     # Client-side Java SAST analyzer
- ┣ 📂 ai-backend                         # Private Node.js AI Backend & Dashboard (Not Open-Source)
- ┃ ┣ 📂 public                           # Web Dashboard UI files
- ┃ ┣ 📂 src                              # AI caller and caching mechanisms
- ┃ ┗ 📜 index.js                         # Express server, Cryptography, PoW, Rate Limiting
  ┣ 📜 config.properties                  # Client-side settings (minimal config, no backend URL leak)
  ┗ 📜 pom.xml                            # Maven project configuration
 ```
@@ -53,12 +49,12 @@ Ensure Maven is installed and compile the project:
 ```bash
 mvn clean package -DskipTests=true
 ```
-The compiled executable fat-jar will be generated at `target/BackdoorDetect-1.1.1.jar`.
+The compiled executable fat-jar will be generated at `target/BackdoorDetect-1.1.2.jar`.
 
 ### 2. Scanning a Plugin
 Run the scan command:
 ```bash
-java -jar target/BackdoorDetect-1.1.1.jar scan "path/to/plugin.jar" AI_MODERN
+java -jar target/BackdoorDetect-1.1.2.jar scan "path/to/plugin.jar" AI_MODERN
 ```
 * **AI_MODERN:** The default recommended mode. Performs local static analysis, decrypts the PoW challenge, encrypts the findings, and queries the private backend for LLM verification.
 * By default, the client is pre-configured to communicate directly with your private backend server (`http://93.115.101.157:13384`).
